@@ -7,7 +7,7 @@ struct LinkedInCommentAssistantApp: App {
     @StateObject private var model = AppModel.shared
 
     var body: some Scene {
-        MenuBarExtra("LinkedIn Assistant", systemImage: "text.bubble") {
+        MenuBarExtra("LKD Comments", systemImage: "text.bubble") {
             Button("Scan LinkedIn Feed") {
                 model.presentCurrentCompanion()
                 model.triggerScan()

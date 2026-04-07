@@ -111,6 +111,12 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct ProviderSettings: Codable, Equatable, Sendable {
+    public static let openAIModelPresets: [String] = [
+        "gpt-5", "gpt-5-mini", "gpt-5.3-mini",
+        "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+        "o3-mini", "o4-mini"
+    ]
+
     public var kind: ProviderKind
     public var openAIBaseURL: String
     public var openAIModel: String
@@ -433,6 +439,7 @@ public struct GenerationRequest: Sendable {
     public var ocrConfidence: Double
     public var languageSelection: CommentLanguage
     public var customLanguage: String
+    public var detectedLanguageName: String?
     public var intent: CommentIntent
     public var uniqueThought: String
     public var personaProfile: PersonaProfile
@@ -444,6 +451,7 @@ public struct GenerationRequest: Sendable {
         ocrConfidence: Double,
         languageSelection: CommentLanguage,
         customLanguage: String,
+        detectedLanguageName: String? = nil,
         intent: CommentIntent,
         uniqueThought: String,
         personaProfile: PersonaProfile,
@@ -454,6 +462,7 @@ public struct GenerationRequest: Sendable {
         self.ocrConfidence = ocrConfidence
         self.languageSelection = languageSelection
         self.customLanguage = customLanguage
+        self.detectedLanguageName = detectedLanguageName
         self.intent = intent
         self.uniqueThought = uniqueThought
         self.personaProfile = personaProfile
@@ -464,7 +473,10 @@ public struct GenerationRequest: Sendable {
     public var resolvedLanguageLabel: String {
         switch languageSelection {
         case .sameAsPost:
-            return "Match the language of the original post"
+            if let detected = detectedLanguageName, !detected.isEmpty {
+                return detected
+            }
+            return "English"
         case .english:
             return "English"
         case .spanish:

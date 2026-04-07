@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import Foundation
+import NaturalLanguage
 
 @MainActor
 public final class AppModel: ObservableObject {
@@ -49,6 +50,7 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var isReadingModeActive = false
     @Published public private(set) var readingSelectionFrame: CGRect?
     @Published public private(set) var localProviderHealth: LocalProviderHealth = .unknown
+    @Published public private(set) var availableOllamaModels: [String] = []
 
     public var onPresentCompanion: ((CGRect?) -> Void)?
     public var onDismissCompanion: (() -> Void)?
@@ -69,6 +71,8 @@ public final class AppModel: ObservableObject {
     private let commentGenerator: CommentGeneratorService
     private let clipboardService: ClipboardService
     private let hotKeyMonitor: HotKeyMonitor
+    private var activeGenerationTask: Task<Void, Never>?
+    private var activeScanTask: Task<Void, Never>?
     private var activationObserver: NSObjectProtocol?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
     private var lastCompanionAnchorFrame: CGRect?
@@ -129,9 +133,9 @@ public final class AppModel: ObservableObject {
 
         if settings.provider.kind == .ollama {
             switch localProviderHealth {
-            case .unavailable, .modelMissing, .invalidEndpoint, .resourceRisk:
+            case .unavailable, .modelMissing, .invalidEndpoint:
                 blockers.append("fix the local Ollama provider status in Settings")
-            case .unknown, .checking, .ready:
+            case .unknown, .checking, .ready, .resourceRisk:
                 break
             }
         }
@@ -162,9 +166,9 @@ public final class AppModel: ObservableObject {
             return hasStoredAPIKey
         case .ollama:
             switch localProviderHealth {
-            case .ready, .unknown, .checking:
+            case .ready, .unknown, .checking, .resourceRisk:
                 return true
-            case .unavailable, .modelMissing, .invalidEndpoint, .resourceRisk:
+            case .unavailable, .modelMissing, .invalidEndpoint:
                 return false
             }
         }
@@ -194,7 +198,11 @@ public final class AppModel: ObservableObject {
     }
 
     public var overlayPanelSize: CGSize {
-        isOverlayExpanded ? CGSize(width: 418, height: 640) : CGSize(width: 70, height: 220)
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+        if !isOverlayExpanded {
+            return CGSize(width: 28, height: screenHeight)
+        }
+        return CGSize(width: 340, height: screenHeight)
     }
 
     public func start() {
@@ -222,13 +230,15 @@ public final class AppModel: ObservableObject {
     }
 
     public func triggerScan() {
-        Task { @MainActor in
+        activeScanTask?.cancel()
+        activeScanTask = Task { @MainActor in
             await self.scanVisibleFeed(selectionRect: self.isReadingModeActive ? self.readingSelectionFrame : nil)
         }
     }
 
     public func triggerReadingSelectionScan() {
-        Task { @MainActor in
+        activeScanTask?.cancel()
+        activeScanTask = Task { @MainActor in
             guard self.readingSelectionFrame != nil else {
                 self.errorMessage = AppError.missingReadingSelection.localizedDescription
                 return
@@ -238,15 +248,34 @@ public final class AppModel: ObservableObject {
     }
 
     public func triggerGenerate() {
-        Task { @MainActor in
+        guard !isGenerating else { return }
+        activeGenerationTask = Task { @MainActor in
             await self.generateComments()
         }
     }
 
     public func triggerScanAndGenerate() {
-        Task { @MainActor in
+        guard !isGenerating else { return }
+        activeGenerationTask = Task { @MainActor in
             await self.scanThenGenerate()
         }
+    }
+
+    public func cancelGeneration() {
+        activeGenerationTask?.cancel()
+        activeGenerationTask = nil
+        statusMessage = "Generation cancelled."
+    }
+
+    public var resolvedPersona: PersonaProfile {
+        personaProfile ?? builtInPersonaProfile()
+    }
+
+    public var resourceWarning: String? {
+        if case .resourceRisk(let message) = localProviderHealth {
+            return message
+        }
+        return nil
     }
 
     public func refreshProviderHealth() {
@@ -366,6 +395,23 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    public func importContextFile(from url: URL) {
+        do {
+            guard url.startAccessingSecurityScopedResource() else {
+                throw AppError.generationFailed("Could not access the selected file.")
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+            let content = try String(contentsOf: url, encoding: .utf8)
+            var copy = settings
+            copy.additionalPromptContext = content
+            settings = copy
+            statusMessage = "Imported \(url.lastPathComponent) into global prompt context."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     public func clearPersona() {
         personaProfile = builtInPersonaProfile()
         settings.personaFilePath = nil
@@ -419,6 +465,13 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    public func switchProvider(to kind: ProviderKind) {
+        guard settings.provider.kind != kind else { return }
+        var copy = settings
+        copy.provider.kind = kind
+        settings = copy
+    }
+
     public func copy(candidate: GeneratedCandidate) {
         clipboardService.copy(candidate.text)
         statusMessage = "Copied candidate to clipboard."
@@ -460,6 +513,7 @@ public final class AppModel: ObservableObject {
 
     private func scanVisibleFeed(selectionRect: CGRect? = nil) async {
         isScanning = true
+        scanResult = nil
         generatedCandidates = []
         errorMessage = nil
         statusMessage = selectionRect == nil
@@ -601,7 +655,9 @@ public final class AppModel: ObservableObject {
     }
 
     private func generateComments() async {
-        let personaProfile = self.personaProfile ?? builtInPersonaProfile()
+        guard !Task.isCancelled else { return }
+
+        let personaProfile = resolvedPersona
 
         let apiKey: String?
         switch settings.provider.kind {
@@ -614,12 +670,12 @@ public final class AppModel: ObservableObject {
         case .ollama:
             await evaluateProviderHealth()
             switch localProviderHealth {
-            case .ready, .unknown:
+            case .ready, .unknown, .resourceRisk:
                 break
             case .checking:
                 errorMessage = "Local provider check is still running. Try again in a moment."
                 return
-            case .unavailable, .modelMissing, .invalidEndpoint, .resourceRisk:
+            case .unavailable, .modelMissing, .invalidEndpoint:
                 errorMessage = localProviderHealthMessage
                 return
             }
@@ -635,6 +691,7 @@ public final class AppModel: ObservableObject {
         isGenerating = true
         errorMessage = nil
         statusMessage = "Generating comment candidates…"
+        generatedCandidates = []
         presentCurrentCompanion()
 
         defer { isGenerating = false }
@@ -645,11 +702,14 @@ public final class AppModel: ObservableObject {
             preferredLanguage: resolvedExampleLanguageCode()
         )
 
+        let detectedLanguage = detectPostLanguage(postText)
+
         let request = GenerationRequest(
             postText: postText,
             ocrConfidence: scanResult?.overallConfidence ?? 0,
             languageSelection: selectedLanguage,
             customLanguage: customLanguageInput,
+            detectedLanguageName: detectedLanguage,
             intent: selectedIntent,
             uniqueThought: uniqueThought,
             personaProfile: personaProfile,
@@ -663,9 +723,12 @@ public final class AppModel: ObservableObject {
                 apiKey: apiKey,
                 provider: settings.provider
             )
+            guard !Task.isCancelled else { return }
             generatedCandidates = generated
             statusMessage = "Generated 3 candidate comments."
             onPresentCompanion?(lastCompanionAnchorFrame)
+        } catch is CancellationError {
+            statusMessage = "Generation cancelled."
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -727,6 +790,7 @@ public final class AppModel: ObservableObject {
     }
 
     private func startTrackingActiveApplications() {
+        guard activationObserver == nil else { return }
         let supportedBrowsers = CaptureService.supportedBrowserBundleIDs
 
         if let currentBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
@@ -786,6 +850,15 @@ public final class AppModel: ObservableObject {
         }
 
         return NSScreen.main
+    }
+
+    private func detectPostLanguage(_ text: String) -> String? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let language = recognizer.dominantLanguage, language != .undetermined else {
+            return nil
+        }
+        return Locale.current.localizedString(forLanguageCode: language.rawValue)
     }
 
     private func builtInPersonaProfile() -> PersonaProfile {
@@ -853,6 +926,7 @@ public final class AppModel: ObservableObject {
             }
 
             let payload = try JSONDecoder().decode(OllamaTagsEnvelope.self, from: data)
+            availableOllamaModels = payload.models.map(\.name)
             let installedModels = payload.models.map { $0.name.lowercased() }
             let requestedModel = modelName.lowercased()
 

@@ -29,7 +29,31 @@ public final class OllamaCommentGeneratorService: CommentGeneratorService {
         let fullPrompt = """
         \(prompt.instructions)
 
-        Return only JSON that matches the requested schema.
+        You MUST return ONLY a JSON object matching this exact structure (no other text):
+        {
+          "candidates": [
+            {
+              "id": "1",
+              "text": "your comment here",
+              "rationale": "why this comment works",
+              "lengthCategory": "short"
+            },
+            {
+              "id": "2",
+              "text": "your comment here",
+              "rationale": "why this comment works",
+              "lengthCategory": "medium"
+            },
+            {
+              "id": "3",
+              "text": "your comment here",
+              "rationale": "why this comment works",
+              "lengthCategory": "expanded"
+            }
+          ]
+        }
+
+        lengthCategory must be one of: "short", "medium", "expanded"
 
         \(prompt.userMessage)
         """
@@ -37,17 +61,17 @@ public final class OllamaCommentGeneratorService: CommentGeneratorService {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.timeoutInterval = 45
+        urlRequest.timeoutInterval = 60
         urlRequest.httpBody = try encoder.encode(
             OllamaGenerateRequest(
                 model: provider.ollamaModel,
-                system: "You are a precise LinkedIn comment generator. Return valid JSON only.",
+                system: "You are a precise LinkedIn comment generator. You MUST return valid JSON only. No markdown, no explanation, just the JSON object.",
                 prompt: fullPrompt,
                 stream: false,
-                format: prompt.schema,
+                format: .string("json"),
                 options: OllamaGenerateOptions(
                     temperature: 0.45,
-                    numPredict: 220,
+                    numPredict: 800,
                     numCtx: 2048,
                     repeatPenalty: 1.05
                 )
@@ -56,6 +80,10 @@ public final class OllamaCommentGeneratorService: CommentGeneratorService {
 
         do {
             let (data, response) = try await session.data(for: urlRequest)
+
+            guard data.count < 5_000_000 else {
+                throw AppError.generationFailed("Ollama returned an unexpectedly large response (\(data.count / 1_000_000) MB).")
+            }
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw AppError.networkError("The Ollama server did not return a valid HTTP response.")
@@ -69,8 +97,21 @@ public final class OllamaCommentGeneratorService: CommentGeneratorService {
             }
 
             let envelope = try decoder.decode(OllamaGenerateResponse.self, from: data)
-            return try responseParser.parseCandidates(from: envelope.response)
-        } catch is URLError {
+            let responseText = envelope.response.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !responseText.isEmpty else {
+                throw AppError.generationFailed(
+                    "Ollama returned an empty response. The model \(provider.ollamaModel) may not support JSON output. Try a different model like llama3.1:8b or qwen2.5:7b."
+                )
+            }
+
+            return try responseParser.parseCandidates(from: responseText)
+        } catch let urlError as URLError {
+            if urlError.code == .timedOut {
+                throw AppError.generationFailed(
+                    "Ollama took too long to respond. The model may be loading into memory. Try again in a moment."
+                )
+            }
             throw AppError.missingLocalProvider(
                 "The local Ollama server is unavailable at \(provider.ollamaBaseURL). Install/start Ollama and pull \(provider.ollamaModel)."
             )

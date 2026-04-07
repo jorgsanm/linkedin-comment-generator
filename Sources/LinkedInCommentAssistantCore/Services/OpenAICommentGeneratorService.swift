@@ -46,6 +46,10 @@ public final class OpenAICommentGeneratorService: CommentGeneratorService {
 
         let (data, response) = try await session.data(for: urlRequest)
 
+        guard data.count < 5_000_000 else {
+            throw AppError.generationFailed("The API returned an unexpectedly large response (\(data.count / 1_000_000) MB).")
+        }
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppError.networkError("The server did not return a valid HTTP response.")
         }

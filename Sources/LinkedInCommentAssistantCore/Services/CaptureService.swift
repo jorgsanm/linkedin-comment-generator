@@ -74,8 +74,18 @@ public final class CaptureService {
         let filter = SCContentFilter(display: display, including: [selectedWindow])
         let configuration = SCStreamConfiguration()
         configuration.showsCursor = false
-        configuration.width = Int(selectedWindow.frame.width * 2)
-        configuration.height = Int(selectedWindow.frame.height * 2)
+
+        let maxCaptureDimension = 4000
+        let rawWidth = Int(selectedWindow.frame.width * 2)
+        let rawHeight = Int(selectedWindow.frame.height * 2)
+        if max(rawWidth, rawHeight) > maxCaptureDimension {
+            let scale = Double(maxCaptureDimension) / Double(max(rawWidth, rawHeight))
+            configuration.width = Int(Double(rawWidth) * scale)
+            configuration.height = Int(Double(rawHeight) * scale)
+        } else {
+            configuration.width = rawWidth
+            configuration.height = rawHeight
+        }
 
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         let selectedAppName = selectedWindow.owningApplication?.applicationName ?? frontmostApp?.localizedName ?? "Browser"

@@ -12,6 +12,10 @@ public final class HotKeyMonitor {
 
     deinit {
         unregister()
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
+        }
     }
 
     public func register(_ configuration: HotKeyConfiguration) {
