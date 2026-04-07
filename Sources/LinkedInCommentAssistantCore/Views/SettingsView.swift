@@ -5,8 +5,11 @@ import UniformTypeIdentifiers
 public struct SettingsView: View {
     @ObservedObject private var model: AppModel
     @State private var isPersonaFileImporterPresented = false
+    @State private var isContextFileImporterPresented = false
     @State private var isAPIKeyFileImporterPresented = false
     @State private var apiKeyDraft = ""
+    @State private var useCustomOpenAIModel = false
+    @State private var useCustomOllamaModel = false
 
     public init(model: AppModel) {
         self.model = model
@@ -14,10 +17,9 @@ public struct SettingsView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 20) {
                 onboardingSection
-                personaSection
-                styleCorpusSection
+                styleAndGuidelinesSection
                 providerSection
                 defaultsSection
                 privacySection
@@ -35,46 +37,44 @@ public struct SettingsView: View {
         )
         .fileImporter(
             isPresented: $isPersonaFileImporterPresented,
-            allowedContentTypes: supportedPersonaContentTypes
+            allowedContentTypes: supportedTextContentTypes
         ) { result in
             guard case .success(let url) = result else { return }
             model.importPersona(from: url)
         }
         .fileImporter(
+            isPresented: $isContextFileImporterPresented,
+            allowedContentTypes: supportedTextContentTypes
+        ) { result in
+            guard case .success(let url) = result else { return }
+            model.importContextFile(from: url)
+        }
+        .fileImporter(
             isPresented: $isAPIKeyFileImporterPresented,
-            allowedContentTypes: supportedAPIKeyContentTypes
+            allowedContentTypes: supportedTextContentTypes
         ) { result in
             guard case .success(let url) = result else { return }
             model.importAPIKey(from: url)
         }
+        .onAppear {
+            useCustomOpenAIModel = !ProviderSettings.openAIModelPresets.contains(model.settings.provider.openAIModel)
+            useCustomOllamaModel = !model.availableOllamaModels.contains(model.settings.provider.ollamaModel)
+        }
     }
 
-    private var supportedPersonaContentTypes: [UTType] {
-        let markdownType = UTType(filenameExtension: "md") ?? .plainText
-        return [.plainText, .text, markdownType]
-    }
-
-    private var supportedAPIKeyContentTypes: [UTType] {
+    private var supportedTextContentTypes: [UTType] {
+        let mdType = UTType(filenameExtension: "md") ?? .plainText
         let envType = UTType(filenameExtension: "env") ?? .plainText
-        return [.plainText, .text, envType]
+        return [.plainText, .text, mdType, envType]
     }
+
+    // MARK: - Onboarding
 
     private var onboardingSection: some View {
-        sectionCard(title: "Onboarding") {
+        sectionCard(title: "Setup") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Configure Screen Recording, choose a provider, optionally import a persona Markdown file, and add style/context notes. Generated comments are not stored.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-
                 HStack(spacing: 16) {
-                    statusPill(
-                        title: "Screen Recording",
-                        isComplete: model.permissionState == .granted
-                    )
-                    statusPill(
-                        title: "Persona",
-                        isComplete: model.personaProfile != nil
-                    )
+                    statusPill(title: "Screen Recording", isComplete: model.permissionState == .granted)
                     statusPill(
                         title: model.settings.provider.kind == .openAI ? "OpenAI Key" : "Local Provider",
                         isComplete: model.isProviderReady
@@ -82,89 +82,83 @@ public struct SettingsView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Button("Grant Screen Recording Access") {
+                    Button("Grant Screen Recording") {
                         model.requestScreenRecordingAccess()
                     }
 
-                    Button("Refresh Permission Status") {
+                    Button("Refresh") {
                         model.refreshPermissionState()
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Open System Settings") {
+                    Button("System Settings") {
                         model.openScreenRecordingPreferences()
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Relaunch App") {
+                    Button("Relaunch") {
                         model.relaunchApplication()
                     }
                     .buttonStyle(.bordered)
                 }
-
-                Text("After allowing Screen Recording in macOS, return to the app and press Refresh. If macOS still shows it as denied, use Relaunch App once.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 statusAndErrorMessages
             }
         }
     }
 
-    private var personaSection: some View {
-        sectionCard(title: "Persona Profile") {
+    // MARK: - Style & Guidelines (merged persona + corpus + prompt)
+
+    private var styleAndGuidelinesSection: some View {
+        sectionCard(title: "Style & Guidelines") {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Button("Import Persona Markdown") {
-                        isPersonaFileImporterPresented = true
-                    }
+                // Persona subsection
+                DisclosureGroup("Persona Profile") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Button("Import Persona File") {
+                                isPersonaFileImporterPresented = true
+                            }
+                            .buttonStyle(.bordered)
 
-                    Button("Use Built-In Persona") {
-                        model.useBuiltInPersona()
+                            Button("Use Built-In") {
+                                model.useBuiltInPersona()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let persona = model.personaProfile {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(persona.name) — \(model.isUsingImportedPersona ? "Imported" : "Built-in")")
+                                    .font(.subheadline.weight(.medium))
+                                Text("Voice: \(persona.voice)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("Tone: \(persona.tone)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
                 }
+                .font(.subheadline.weight(.medium))
 
-                if let persona = model.personaProfile {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(persona.name)
-                            .font(.title3.weight(.semibold))
-                        Text(model.isUsingImportedPersona ? "Imported Markdown persona" : "Built-in fallback persona")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Text("Default language: \(persona.defaultLanguage) • Default intent: \(persona.defaultIntent.displayName) • Max sentences: \(persona.maxCommentSentences)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text("Voice: \(persona.voice)")
-                            .font(.subheadline)
-                        Text("Tone: \(persona.tone)")
-                            .font(.subheadline)
-                    }
-                } else {
-                    Text("Expected format: YAML front matter with `name`, `default_language`, `default_intent`, `max_comment_sentences`, followed by `## Voice`, `## Tone`, `## Do`, and `## Avoid` sections.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                Divider()
 
-                Text("Imported persona files are copied into the app’s Application Support folder, so the app does not depend on the original file staying readable later.")
+                // Style examples
+                Text("Style examples")
+                    .font(.subheadline.weight(.medium))
+                Text("Paste prior comments separated by blank lines. Used as retrieval examples.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var styleCorpusSection: some View {
-        sectionCard(title: "Style Examples And Prompt Context") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Paste prior comments separated by blank lines. These stay local and are used only as retrieval examples at generation time.")
                     .foregroundStyle(.secondary)
 
                 TextEditor(text: settingsBinding(\.styleCorpusRawText))
                     .font(.body.monospaced())
-                    .frame(minHeight: 220)
+                    .frame(height: 300)
                     .padding(10)
                     .background(.white.opacity(0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 Text("\(model.styleCorpus.count) unique examples ready for retrieval")
                     .font(.caption)
@@ -172,21 +166,34 @@ public struct SettingsView: View {
 
                 Divider()
 
-                Text("Global prompt/context")
-                    .font(.headline)
-
-                Text("Use this for stable instructions that should be included on every generation, such as audience, style notes, banned phrases, or recurring context.")
-                    .foregroundStyle(.secondary)
+                // Global prompt/context
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Global prompt / context")
+                            .font(.subheadline.weight(.medium))
+                        Text("Stable instructions for every generation: audience, style, banned phrases, or any context.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Import File") {
+                        isContextFileImporterPresented = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
 
                 TextEditor(text: settingsBinding(\.additionalPromptContext))
                     .font(.body.monospaced())
-                    .frame(minHeight: 140)
+                    .frame(height: 220)
                     .padding(10)
                     .background(.white.opacity(0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
         }
     }
+
+    // MARK: - Provider
 
     private var providerSection: some View {
         sectionCard(title: "LLM Provider") {
@@ -199,87 +206,159 @@ public struct SettingsView: View {
                 .pickerStyle(.segmented)
 
                 if model.settings.provider.kind == .openAI {
-                    TextField("OpenAI model", text: settingsBinding(\.provider.openAIModel))
-                        .textFieldStyle(.roundedBorder)
-
-                    TextField("OpenAI API endpoint", text: settingsBinding(\.provider.openAIBaseURL))
-                        .textFieldStyle(.roundedBorder)
-
-                    HStack(spacing: 12) {
-                        SecureField(model.hasStoredAPIKey ? "Stored in Keychain" : "OpenAI API key", text: $apiKeyDraft)
-                            .textFieldStyle(.roundedBorder)
-
-                        Button("Save Key") {
-                            guard !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                            model.saveAPIKey(apiKeyDraft)
-                            apiKeyDraft = ""
-                        }
-
-                        if model.hasStoredAPIKey {
-                            Button("Remove Key") {
-                                model.removeAPIKey()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Button("Import .env / Key File") {
-                            isAPIKeyFileImporterPresented = true
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Text("The API key is saved to macOS Keychain, not stored in source code or in the app settings file.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    openAIProviderSection
                 } else {
-                    TextField("Ollama model", text: settingsBinding(\.provider.ollamaModel))
-                        .textFieldStyle(.roundedBorder)
-
-                    TextField("Ollama endpoint", text: settingsBinding(\.provider.ollamaBaseURL))
-                        .textFieldStyle(.roundedBorder)
-
-                    HStack(spacing: 10) {
-                        Button("Check Local Provider") {
-                            model.refreshProviderHealth()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        providerHealthBadge
-                    }
-
-                    Text(model.localProviderHealthMessage)
-                        .font(.caption)
-                        .foregroundStyle(providerHealthColor)
-
-                    Text("Expected local server: `ollama serve` or `brew services start ollama`, usually at `http://127.0.0.1:11434/api/generate`.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text("If your Mac becomes unstable with larger models, switch to a lighter Ollama model (for example, 7B or 3B).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ollamaProviderSection
                 }
             }
         }
     }
 
+    private var openAIProviderSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Model picker
+            HStack(spacing: 8) {
+                Picker("Model", selection: openAIModelPickerBinding) {
+                    ForEach(ProviderSettings.openAIModelPresets, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                    Text("Custom…").tag("__custom__")
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 200)
+
+                if useCustomOpenAIModel {
+                    TextField("Model name", text: settingsBinding(\.provider.openAIModel))
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            TextField("API endpoint", text: settingsBinding(\.provider.openAIBaseURL))
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 12) {
+                SecureField(model.hasStoredAPIKey ? "Stored in Keychain" : "OpenAI API key", text: $apiKeyDraft)
+                    .textFieldStyle(.roundedBorder)
+
+                Button("Save Key") {
+                    guard !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    model.saveAPIKey(apiKeyDraft)
+                    apiKeyDraft = ""
+                }
+
+                if model.hasStoredAPIKey {
+                    Button("Remove Key") { model.removeAPIKey() }
+                        .buttonStyle(.bordered)
+                }
+
+                Button("Import Key File") { isAPIKeyFileImporterPresented = true }
+                    .buttonStyle(.bordered)
+            }
+
+            Text("API key is saved to macOS Keychain, not stored in source code or settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var ollamaProviderSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Model picker
+            HStack(spacing: 8) {
+                if model.availableOllamaModels.isEmpty {
+                    TextField("Ollama model", text: settingsBinding(\.provider.ollamaModel))
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    Picker("Model", selection: ollamaModelPickerBinding) {
+                        ForEach(model.availableOllamaModels, id: \.self) { modelName in
+                            Text(modelName).tag(modelName)
+                        }
+                        Text("Custom…").tag("__custom__")
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 200)
+
+                    if useCustomOllamaModel {
+                        TextField("Model name", text: settingsBinding(\.provider.ollamaModel))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                Button("Refresh") { model.refreshProviderHealth() }
+                    .buttonStyle(.bordered)
+            }
+
+            TextField("Ollama endpoint", text: settingsBinding(\.provider.ollamaBaseURL))
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 10) {
+                Button("Check Provider") { model.refreshProviderHealth() }
+                    .buttonStyle(.borderedProminent)
+                providerHealthBadge
+            }
+
+            Text(model.localProviderHealthMessage)
+                .font(.caption)
+                .foregroundStyle(providerHealthColor)
+        }
+    }
+
+    // Model picker bindings
+
+    private var openAIModelPickerBinding: Binding<String> {
+        Binding(
+            get: {
+                let current = model.settings.provider.openAIModel
+                if ProviderSettings.openAIModelPresets.contains(current) {
+                    return current
+                }
+                return "__custom__"
+            },
+            set: { newValue in
+                if newValue == "__custom__" {
+                    useCustomOpenAIModel = true
+                } else {
+                    useCustomOpenAIModel = false
+                    var copy = model.settings
+                    copy.provider.openAIModel = newValue
+                    model.settings = copy
+                }
+            }
+        )
+    }
+
+    private var ollamaModelPickerBinding: Binding<String> {
+        Binding(
+            get: {
+                let current = model.settings.provider.ollamaModel
+                if model.availableOllamaModels.contains(current) {
+                    return current
+                }
+                return "__custom__"
+            },
+            set: { newValue in
+                if newValue == "__custom__" {
+                    useCustomOllamaModel = true
+                } else {
+                    useCustomOllamaModel = false
+                    var copy = model.settings
+                    copy.provider.ollamaModel = newValue
+                    model.settings = copy
+                }
+            }
+        )
+    }
+
     private var providerHealthBadge: some View {
         let title: String
         switch model.localProviderHealth {
-        case .ready:
-            title = "Ready"
-        case .checking:
-            title = "Checking"
-        case .unknown:
-            title = "Unknown"
-        case .unavailable:
-            title = "Offline"
-        case .modelMissing:
-            title = "Model Missing"
-        case .invalidEndpoint:
-            title = "Invalid URL"
-        case .resourceRisk:
-            title = "Too Large"
+        case .ready: title = "Ready"
+        case .checking: title = "Checking"
+        case .unknown: title = "Unknown"
+        case .unavailable: title = "Offline"
+        case .modelMissing: title = "Model Missing"
+        case .invalidEndpoint: title = "Invalid URL"
+        case .resourceRisk: title = "Too Large"
         }
 
         return Text(title)
@@ -293,16 +372,14 @@ public struct SettingsView: View {
 
     private var providerHealthColor: Color {
         switch model.localProviderHealth {
-        case .ready:
-            return Color(red: 0.08, green: 0.50, blue: 0.22)
-        case .checking:
-            return Color(red: 0.12, green: 0.42, blue: 0.82)
-        case .unknown:
-            return .secondary
-        case .unavailable, .modelMissing, .invalidEndpoint, .resourceRisk:
-            return .red
+        case .ready: return Color(red: 0.08, green: 0.50, blue: 0.22)
+        case .checking: return Color(red: 0.12, green: 0.42, blue: 0.82)
+        case .unknown: return .secondary
+        case .unavailable, .modelMissing, .invalidEndpoint, .resourceRisk: return .red
         }
     }
+
+    // MARK: - Defaults
 
     private var defaultsSection: some View {
         sectionCard(title: "Defaults") {
@@ -338,6 +415,8 @@ public struct SettingsView: View {
         }
     }
 
+    // MARK: - Privacy
+
     private var privacySection: some View {
         sectionCard(title: "Privacy") {
             VStack(alignment: .leading, spacing: 12) {
@@ -347,17 +426,14 @@ public struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 12) {
-                    Button("Show Overlay") {
-                        model.presentCurrentCompanion()
-                    }
-
-                    Button("Trigger Scan Now") {
-                        model.triggerScan()
-                    }
+                    Button("Show Overlay") { model.presentCurrentCompanion() }
+                    Button("Trigger Scan Now") { model.triggerScan() }
                 }
             }
         }
     }
+
+    // MARK: - Hotkey
 
     private var hotKeySection: some View {
         sectionCard(title: "Global Hotkey") {
@@ -382,6 +458,8 @@ public struct SettingsView: View {
         }
     }
 
+    // MARK: - Helpers
+
     private var statusAndErrorMessages: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let status = model.statusMessage {
@@ -389,7 +467,6 @@ public struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(Color(red: 0.10, green: 0.41, blue: 0.23))
             }
-
             if let error = model.errorMessage {
                 Text(error)
                     .font(.callout)
@@ -414,17 +491,17 @@ public struct SettingsView: View {
     }
 
     private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text(title)
                 .font(.title2.weight(.semibold))
             content()
         }
-        .padding(20)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.white.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(
-            RoundedRectangle(cornerRadius: 24)
+            RoundedRectangle(cornerRadius: 16)
                 .stroke(Color.black.opacity(0.05), lineWidth: 1)
         )
     }

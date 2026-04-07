@@ -2,39 +2,36 @@ import SwiftUI
 
 public struct CompanionPanelView: View {
     @ObservedObject private var model: AppModel
-    @State private var isPostEditorExpanded = true
+    @State private var isPostEditorExpanded = false
+    @State private var showCopiedToast = false
+    @State private var isHoveringTab = false
 
     public init(model: AppModel) {
         self.model = model
     }
 
     public var body: some View {
-        GeometryReader { proxy in
-            HStack(spacing: 10) {
-                if model.overlayEdge == .left {
-                    edgeHandle
-                }
-
-                if model.isOverlayExpanded {
-                    expandedCard(availableHeight: proxy.size.height - 16)
-                        .transition(.move(edge: model.overlayEdge == .right ? .trailing : .leading).combined(with: .opacity))
-                }
-
-                if model.overlayEdge == .right {
-                    edgeHandle
+        Group {
+            if model.isOverlayExpanded {
+                expandedSidebar
+                    .transition(.move(edge: model.overlayEdge == .right ? .trailing : .leading).combined(with: .opacity))
+            } else {
+                edgeStrip
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+        .background(Color.clear)
+        .animation(.easeInOut(duration: 0.2), value: model.isOverlayExpanded)
+        .sheet(isPresented: $model.isCropSheetPresented) {
+            if let image = model.scanResult?.capturedWindow.image {
+                CropSelectionView(image: image) { croppedImage in
+                    model.applyManualCrop(croppedImage)
                 }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-            .background(Color.clear)
-            .animation(.spring(response: 0.24, dampingFraction: 0.92), value: model.isOverlayExpanded)
-            .sheet(isPresented: $model.isCropSheetPresented) {
-                if let image = model.scanResult?.capturedWindow.image {
-                    CropSelectionView(image: image) { croppedImage in
-                        model.applyManualCrop(croppedImage)
-                    }
-                }
+        }
+        .onChange(of: model.editablePostText) { _, newValue in
+            if !newValue.isEmpty && isPostEditorExpanded {
+                isPostEditorExpanded = false
             }
         }
     }
@@ -43,425 +40,469 @@ public struct CompanionPanelView: View {
         model.overlayEdge == .right ? .trailing : .leading
     }
 
-    private var edgeHandle: some View {
-        VStack(spacing: 12) {
-            Button {
-                model.toggleOverlayExpanded()
-            } label: {
-                Image(systemName: toggleChevron)
-                    .font(.headline.weight(.bold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
+    // MARK: - Collapsed: Full-Height Clickable Strip
 
-            Capsule()
-                .fill(Color.white.opacity(0.45))
-                .frame(width: 18, height: 4)
+    private var edgeStrip: some View {
+        Button {
+            model.toggleOverlayExpanded()
+        } label: {
+            ZStack {
+                // Full-height invisible click target
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Button {
-                model.triggerScan()
-            } label: {
-                Image(systemName: "viewfinder")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-
-            if !model.generatedCandidates.isEmpty {
-                Button {
-                    model.copyBestCandidate()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.title3.weight(.semibold))
-                        .frame(width: 36, height: 36)
+                // Visible pill tab in the center
+                VStack(spacing: 4) {
+                    Image(systemName: toggleChevron)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
                 }
-                .buttonStyle(.plain)
+                .frame(width: 20, height: 56)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.45, green: 0.62, blue: 0.98),
+                            Color(red: 0.28, green: 0.42, blue: 0.88)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                        bottomLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                        bottomTrailingRadius: model.overlayEdge == .right ? 0 : 10,
+                        topTrailingRadius: model.overlayEdge == .right ? 0 : 10
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.15), radius: 6, x: model.overlayEdge == .right ? -2 : 2, y: 0)
+                .scaleEffect(isHoveringTab ? 1.08 : 1.0)
+                .animation(.easeInOut(duration: 0.15), value: isHoveringTab)
             }
-
-            Spacer(minLength: 0)
-
-            Button {
-                let nextEdge: OverlayEdge = model.overlayEdge == .right ? .left : .right
-                model.setOverlayEdge(nextEdge)
-            } label: {
-                Image(systemName: "rectangle.lefthalf.inset.filled.arrow.left")
-                    .rotationEffect(.degrees(model.overlayEdge == .right ? 180 : 0))
-                    .font(.headline)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
         }
-        .foregroundStyle(.white)
-        .padding(.vertical, 14)
-        .frame(width: 58)
+        .buttonStyle(.plain)
+        .frame(width: 28)
         .frame(maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.35, green: 0.57, blue: 0.98), Color(red: 0.13, green: 0.29, blue: 0.63)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .shadow(color: Color.black.opacity(0.16), radius: 14, x: 0, y: 8)
-        .contentShape(RoundedRectangle(cornerRadius: 24))
-        .gesture(handleDragGesture)
-    }
-
-    private func expandedCard(availableHeight: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                statusSection
-            }
-
-            ScrollView(showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 16) {
-                    quickControls
-                    extractedTextSection
-                    candidateSection
-                }
-                .padding(.top, 16)
-                .padding(.bottom, 12)
-            }
-
-            Divider()
-                .padding(.vertical, 12)
-
-            actionButtons
+        .onHover { hovering in
+            isHoveringTab = hovering
         }
-        .padding(18)
-        .frame(width: 342, height: max(availableHeight, 540), alignment: .topLeading)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.99, green: 0.99, blue: 1.0), Color(red: 0.92, green: 0.95, blue: 0.99)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 28))
-        .overlay(
-            RoundedRectangle(cornerRadius: 28)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.14), radius: 18, x: 0, y: 10)
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("LinkedIn Assistant")
-                    .font(.title3.weight(.semibold))
-                Text("Scan the visible feed, tune the comment, then copy.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    // MARK: - Expanded Sidebar
+
+    private var sidebarCornerShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: model.overlayEdge == .right ? 16 : 0,
+            bottomLeadingRadius: model.overlayEdge == .right ? 16 : 0,
+            bottomTrailingRadius: model.overlayEdge == .right ? 0 : 16,
+            topTrailingRadius: model.overlayEdge == .right ? 0 : 16
+        )
+    }
+
+    private var expandedSidebar: some View {
+        HStack(spacing: 0) {
+            if model.overlayEdge == .right {
+                closeFlap
             }
+
+            // Main sidebar content
+            VStack(spacing: 0) {
+                compactHeader
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 10)
+
+                VStack(spacing: 8) {
+                    actionRow
+                    controlsRow
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+
+                Divider()
+                    .padding(.horizontal, 14)
+
+                ScrollView(showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        statusBanners
+                        extractedTextSection
+                        perspectiveField
+                        candidateSection
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+            }
+            .frame(width: 340)
+            .frame(maxHeight: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [Color(red: 0.97, green: 0.98, blue: 1.0), Color(red: 0.92, green: 0.94, blue: 0.99)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .clipShape(sidebarCornerShape)
+            .overlay(
+                sidebarCornerShape
+                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.14), radius: 14, x: model.overlayEdge == .right ? -4 : 4, y: 0)
+
+            if model.overlayEdge == .left {
+                closeFlap
+            }
+        }
+        .overlay(alignment: .top) {
+            if showCopiedToast {
+                Text("Copied!")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color(red: 0.12, green: 0.50, blue: 0.25), in: Capsule())
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 8)
+            }
+        }
+    }
+
+    private var closeFlap: some View {
+        Button {
+            model.toggleOverlayExpanded()
+        } label: {
+            Image(systemName: toggleChevron)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 48)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.45, green: 0.62, blue: 0.98), Color(red: 0.28, green: 0.42, blue: 0.88)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: model.overlayEdge == .right ? 8 : 0,
+                        bottomLeadingRadius: model.overlayEdge == .right ? 8 : 0,
+                        bottomTrailingRadius: model.overlayEdge == .right ? 0 : 8,
+                        topTrailingRadius: model.overlayEdge == .right ? 0 : 8
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 16)
+    }
+
+    // MARK: - Header
+
+    private var compactHeader: some View {
+        HStack(spacing: 10) {
+            Text("LKD Comments")
+                .font(.headline)
 
             Spacer()
+
+            Button {
+                model.toggleReadingMode()
+            } label: {
+                Image(systemName: model.isReadingModeActive ? "viewfinder.rectangular" : "viewfinder.circle")
+                    .font(.subheadline)
+                    .frame(width: 30, height: 30)
+                    .foregroundStyle(model.isReadingModeActive ? Color(red: 0.35, green: 0.57, blue: 0.98) : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(model.isReadingModeActive ? "Exit Reading Mode" : "Reading Mode")
 
             Button {
                 model.openSettingsWindow()
             } label: {
                 Image(systemName: "gearshape")
-                    .frame(width: 28, height: 28)
+                    .font(.subheadline)
+                    .frame(width: 30, height: 30)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
         }
     }
 
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let status = model.statusMessage {
-                labelPill(text: status, tint: Color(red: 0.12, green: 0.43, blue: 0.25), background: Color(red: 0.89, green: 0.96, blue: 0.90))
-            }
+    // MARK: - Action Row (Scan + Generate)
 
-            if let error = model.errorMessage {
-                labelPill(text: error, tint: .red, background: Color(red: 1.0, green: 0.92, blue: 0.92))
-            }
-
-            if !model.currentWarnings.isEmpty {
-                ForEach(model.currentWarnings, id: \.self) { warning in
-                    labelPill(
-                        text: warning,
-                        tint: Color(red: 0.48, green: 0.28, blue: 0.07),
-                        background: Color(red: 0.99, green: 0.95, blue: 0.85)
-                    )
-                }
-            }
-        }
-    }
-
-    private var quickControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            primaryScanButton
-
+    private var actionRow: some View {
+        HStack(spacing: 8) {
             Button {
-                model.toggleReadingMode()
+                model.triggerScan()
             } label: {
-                HStack {
-                    Image(systemName: model.isReadingModeActive ? "xmark.rectangle.fill" : "viewfinder.circle")
-                    Text(model.isReadingModeActive ? "Exit Reading Mode" : "Reading Mode")
+                HStack(spacing: 5) {
+                    if model.isScanning {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: model.isReadingModeActive ? "selection.pin.in.out" : "viewfinder")
+                    }
+                    Text(model.isScanning ? "Scanning…" : "Scan")
                 }
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 9)
             }
             .buttonStyle(.plain)
-            .background(Color.white.opacity(0.88))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .background(Color(red: 0.93, green: 0.96, blue: 1.0))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(red: 0.35, green: 0.57, blue: 0.98).opacity(0.2), lineWidth: 1)
+            )
+            .disabled(model.isScanning)
 
-            if model.isReadingModeActive {
-                Text("Reading mode is active. Scroll normally, position the box over the post, then scan only that box.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 10) {
-                scoreBadge(title: "Provider", value: model.activeProviderDisplayName)
-
-                if let scanResult = model.scanResult {
-                    scoreBadge(title: "OCR", value: percentage(scanResult.overallConfidence))
-                    scoreBadge(title: "Feed", value: percentage(scanResult.linkedInConfidence))
-                    scoreBadge(title: "Source", value: scanResult.capturedWindow.appName)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Comment style")
-                    .font(.subheadline.weight(.semibold))
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(CommentIntent.allCases) { intent in
-                            Button(intent.displayName) {
-                                model.selectedIntent = intent
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule()
-                                    .fill(model.selectedIntent == intent ? Color(red: 0.35, green: 0.57, blue: 0.98) : Color.white.opacity(0.92))
-                            )
-                            .foregroundStyle(model.selectedIntent == intent ? .white : .primary)
-                        }
+            if model.isGenerating {
+                Button {
+                    model.cancelGeneration()
+                } label: {
+                    HStack(spacing: 5) {
+                        ProgressView().controlSize(.mini).tint(.white)
+                        Text("Cancel")
                     }
-                }
-            }
-
-            HStack(spacing: 10) {
-                Picker("Language", selection: $model.selectedLanguage) {
-                    ForEach(CommentLanguage.allCases) { language in
-                        Text(language.displayName).tag(language)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if model.selectedLanguage == .custom {
-                TextField("Custom language", text: $model.customLanguageInput)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Add perspective")
                     .font(.subheadline.weight(.semibold))
-
-                TextField("I.e., mention what stood out to you…", text: $model.uniqueThought, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(2...4)
-            }
-        }
-    }
-
-    private var extractedTextSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Detected post")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button(isPostEditorExpanded ? "Fold" : "Edit") {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        isPostEditorExpanded.toggle()
-                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
                 }
                 .buttonStyle(.plain)
-            }
-
-            if isPostEditorExpanded {
-                TextEditor(text: $model.editablePostText)
-                    .font(.callout)
-                    .frame(minHeight: 132, maxHeight: 164)
-                    .padding(10)
-                    .background(Color.white.opacity(0.95))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                .background(Color.red.opacity(0.85))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
-                Text(model.editablePostText.isEmpty ? "No post text yet. Run Scan." : model.editablePostText)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
+                Button {
+                    model.triggerGenerate()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: model.generatedCandidates.isEmpty ? "sparkles" : "arrow.clockwise")
+                        Text(model.generatedCandidates.isEmpty ? "Generate" : "Regenerate")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.40, green: 0.58, blue: 0.98), Color(red: 0.22, green: 0.36, blue: 0.85)],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                )
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .disabled(!model.canGenerate || model.isScanning)
             }
         }
     }
 
-    private var actionButtons: some View {
-        VStack(spacing: 10) {
+    // MARK: - Controls Row
+
+    private var controlsRow: some View {
+        HStack(spacing: 8) {
+            Picker("Intent", selection: $model.selectedIntent) {
+                ForEach(CommentIntent.allCases) { intent in
+                    Text(intent.displayName).tag(intent)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Picker("Language", selection: $model.selectedLanguage) {
+                ForEach(CommentLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .pickerStyle(.menu)
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if model.selectedLanguage == .custom {
+                TextField("Language", text: $model.customLanguageInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .frame(maxWidth: 80)
+            }
+        }
+    }
+
+    // MARK: - Status Banners
+
+    private var statusBanners: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let error = model.errorMessage {
+                labelPill(text: error, tint: .red, background: Color(red: 1.0, green: 0.93, blue: 0.93))
+            }
+
+            if let status = model.statusMessage {
+                labelPill(text: status, tint: Color(red: 0.12, green: 0.43, blue: 0.25), background: Color(red: 0.90, green: 0.96, blue: 0.91))
+            }
+
             if let readinessMessage = model.generationReadinessMessage {
-                VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
                     Text(readinessMessage)
                         .font(.caption)
                         .foregroundStyle(Color(red: 0.48, green: 0.28, blue: 0.07))
-                    Button("Open Settings") {
-                        model.openSettingsWindow()
-                    }
-                    .buttonStyle(.bordered)
+                    Button("Settings") { model.openSettingsWindow() }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color(red: 0.35, green: 0.57, blue: 0.98))
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Color(red: 0.99, green: 0.95, blue: 0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .background(Color(red: 0.99, green: 0.96, blue: 0.87))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-
-            Button {
-                model.triggerGenerate()
-            } label: {
-                HStack {
-                    Image(systemName: model.generatedCandidates.isEmpty ? "sparkles" : "arrow.clockwise")
-                    Text(model.generatedCandidates.isEmpty ? "Generate Comments" : "Regenerate Comments")
-                }
-                .font(.headline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
-            .background(
-                LinearGradient(
-                    colors: [Color(red: 0.45, green: 0.61, blue: 0.99), Color(red: 0.22, green: 0.34, blue: 0.82)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .disabled(!model.canGenerate || model.isScanning)
-
-            HStack(spacing: 10) {
-                Button("Copy Best") {
-                    model.copyBestCandidate()
-                }
-                .disabled(model.generatedCandidates.isEmpty)
-
-                Button("Manual Crop") {
-                    model.presentCropSheet()
-                }
-                .disabled(model.scanResult == nil)
-            }
-            .buttonStyle(.bordered)
         }
     }
+
+    // MARK: - Post Text
+
+    private var extractedTextSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Post text")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(isPostEditorExpanded ? "Fold" : "Expand") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isPostEditorExpanded.toggle()
+                    }
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(red: 0.35, green: 0.57, blue: 0.98))
+            }
+
+            if isPostEditorExpanded {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $model.editablePostText)
+                        .font(.callout)
+                        .frame(minHeight: 80, maxHeight: 150)
+                        .scrollContentBackground(.hidden)
+
+                    if model.editablePostText.isEmpty {
+                        Text("Paste or type a LinkedIn post here…")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 8)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(10)
+                .background(Color.white.opacity(0.75))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else if !model.editablePostText.isEmpty {
+                Text(model.editablePostText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            } else {
+                Button {
+                    isPostEditorExpanded = true
+                } label: {
+                    Text("Paste or scan a post to get started")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color.white.opacity(0.55))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Perspective
+
+    private var perspectiveField: some View {
+        TextField("Add your perspective…", text: $model.uniqueThought, axis: .vertical)
+            .font(.callout)
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1...2)
+    }
+
+    // MARK: - Candidates
 
     private var candidateSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Candidates")
-                .font(.subheadline.weight(.semibold))
-
+        VStack(alignment: .leading, spacing: 8) {
             if model.generatedCandidates.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("No generated comments yet.")
-                        .font(.callout.weight(.medium))
-                    Text("Use Scan while LinkedIn is visible in Brave, Safari, Chrome, or Arc, then generate.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Color.white.opacity(0.88))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                Text("Generated comments will appear here.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Color.white.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.generatedCandidates) { candidate in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(candidate.lengthCategory.rawValue.capitalized)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Copy") {
-                                    model.copy(candidate: candidate)
+                ForEach(model.generatedCandidates) { candidate in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top) {
+                            Text(candidate.lengthCategory.rawValue.capitalized)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                model.copy(candidate: candidate)
+                                withAnimation(.easeInOut(duration: 0.2)) { showCopiedToast = true }
+                                Task {
+                                    try? await Task.sleep(for: .seconds(1.2))
+                                    withAnimation(.easeInOut(duration: 0.3)) { showCopiedToast = false }
                                 }
-                                .buttonStyle(.plain)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "doc.on.doc")
+                                    Text("Copy")
+                                }
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color(red: 0.35, green: 0.57, blue: 0.98))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(red: 0.93, green: 0.96, blue: 1.0))
+                                .clipShape(Capsule())
                             }
-
-                            Text(candidate.text)
-                                .font(.callout)
-                                .fixedSize(horizontal: false, vertical: true)
+                            .buttonStyle(.plain)
                         }
-                        .padding(12)
-                        .background(Color.white.opacity(0.94))
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
+
+                        Text(candidate.text)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if !candidate.rationale.isEmpty {
+                            DisclosureGroup("Why this comment") {
+                                Text(candidate.rationale)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        }
                     }
+                    .padding(12)
+                    .background(Color.white.opacity(0.82))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                 }
             }
         }
     }
 
-    private var primaryScanButton: some View {
-        Button {
-            model.triggerScan()
-        } label: {
-            HStack {
-                Image(systemName: model.isScanning ? "hourglass" : (model.isReadingModeActive ? "selection.pin.in.out" : "viewfinder"))
-                Text(
-                    model.isScanning
-                        ? "Scanning LinkedIn…"
-                        : (model.isReadingModeActive ? "Scan Selection" : "Scan LinkedIn Feed")
-                )
-            }
-            .font(.headline.weight(.semibold))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-        }
-        .buttonStyle(.plain)
-        .background(Color.white.opacity(0.96))
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color(red: 0.35, green: 0.57, blue: 0.98).opacity(0.35), lineWidth: 1)
-        )
-    }
+    // MARK: - Helpers
 
     private func labelPill(text: String, tint: Color, background: Color) -> some View {
         Text(text)
             .font(.caption)
             .foregroundStyle(tint)
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private func scoreBadge(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var handleDragGesture: some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onEnded { value in
-                model.moveOverlay(by: value.translation.height)
-            }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var toggleChevron: String {
@@ -475,9 +516,5 @@ public struct CompanionPanelView: View {
         case (.left, false):
             return "chevron.right"
         }
-    }
-
-    private func percentage(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))%"
     }
 }

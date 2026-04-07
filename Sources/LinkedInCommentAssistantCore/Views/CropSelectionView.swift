@@ -117,6 +117,7 @@ public struct CropSelectionView: View {
     }
 
     private func aspectFitRect(for imageSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return bounds }
         let aspectWidth = bounds.width / imageSize.width
         let aspectHeight = bounds.height / imageSize.height
         let scale = min(aspectWidth, aspectHeight)

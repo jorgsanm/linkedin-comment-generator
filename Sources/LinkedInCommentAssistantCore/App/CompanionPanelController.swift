@@ -22,7 +22,7 @@ public final class CompanionPanelController: NSObject {
 
     private func buildPanel(model: AppModel) -> EdgeOverlayPanel {
         let panel = EdgeOverlayPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 418, height: 640),
+            contentRect: CGRect(x: 0, y: 0, width: 340, height: 800),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -47,14 +47,10 @@ public final class CompanionPanelController: NSObject {
 
     private func applyLayout(to panel: NSPanel, model: AppModel, near sourceWindowFrame: CGRect?, animated: Bool) {
         let panelSize = model.overlayPanelSize
-        let screen = resolvedScreen(near: sourceWindowFrame)
-        let visibleFrame = screen.visibleFrame.insetBy(dx: 12, dy: 24)
-        let maxY = max(visibleFrame.maxY - panelSize.height, visibleFrame.minY)
-        let yTravel = max(visibleFrame.height - panelSize.height, 1)
-        let y = visibleFrame.minY + CGFloat(model.settings.overlayVerticalPosition) * yTravel
-        let clampedY = min(max(y, visibleFrame.minY), maxY)
-        let x: CGFloat
+        guard let screen = resolvedScreen(near: sourceWindowFrame) else { return }
+        let visibleFrame = screen.visibleFrame
 
+        let x: CGFloat
         switch model.overlayEdge {
         case .left:
             x = visibleFrame.minX
@@ -62,11 +58,11 @@ public final class CompanionPanelController: NSObject {
             x = visibleFrame.maxX - panelSize.width
         }
 
-        let frame = CGRect(origin: CGPoint(x: x, y: clampedY), size: panelSize)
+        let frame = CGRect(origin: CGPoint(x: x, y: visibleFrame.minY), size: panelSize)
         panel.setFrame(frame, display: true, animate: animated)
     }
 
-    private func resolvedScreen(near sourceWindowFrame: CGRect?) -> NSScreen {
+    private func resolvedScreen(near sourceWindowFrame: CGRect?) -> NSScreen? {
         if let sourceWindowFrame,
            let matchingScreen = NSScreen.screens.first(where: { $0.frame.intersects(sourceWindowFrame) }) {
             return matchingScreen
@@ -76,11 +72,7 @@ public final class CompanionPanelController: NSObject {
             return mainScreen
         }
 
-        guard let firstScreen = NSScreen.screens.first else {
-            fatalError("No screens available for overlay placement.")
-        }
-
-        return firstScreen
+        return NSScreen.screens.first
     }
 }
 

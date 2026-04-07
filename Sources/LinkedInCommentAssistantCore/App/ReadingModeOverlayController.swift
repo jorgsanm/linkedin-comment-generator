@@ -30,7 +30,7 @@ public final class ReadingModeOverlayController: NSObject {
         self.model = model
         bind(to: model)
 
-        let screen = resolvedScreen(near: model.readingSelectionFrame ?? sourceWindowFrame)
+        guard let screen = resolvedScreen(near: model.readingSelectionFrame ?? sourceWindowFrame) else { return }
         activeScreen = screen
         ensurePanels(for: screen, model: model)
 
@@ -60,8 +60,8 @@ public final class ReadingModeOverlayController: NSObject {
         model.$readingSelectionFrame
             .receive(on: RunLoop.main)
             .sink { [weak self, weak model] selection in
-                guard let self, let model, let selection else { return }
-                let screen = self.resolvedScreen(near: selection)
+                guard let self, let model, let selection,
+                      let screen = self.resolvedScreen(near: selection) else { return }
                 self.activeScreen = screen
                 self.ensurePanels(for: screen, model: model)
                 self.refreshPanels(for: self.clampedSelection(selection, on: screen), on: screen, model: model)
@@ -366,7 +366,7 @@ public final class ReadingModeOverlayController: NSObject {
         .integral
     }
 
-    private func resolvedScreen(near referenceFrame: CGRect?) -> NSScreen {
+    private func resolvedScreen(near referenceFrame: CGRect?) -> NSScreen? {
         if let referenceFrame,
            let matchingScreen = NSScreen.screens.max(
                by: { $0.frame.intersection(referenceFrame).area < $1.frame.intersection(referenceFrame).area }
@@ -379,7 +379,7 @@ public final class ReadingModeOverlayController: NSObject {
             return mainScreen
         }
 
-        return NSScreen.screens[0]
+        return NSScreen.screens.first
     }
 }
 

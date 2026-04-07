@@ -23,7 +23,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "LinkedInCommentAssistant",
-            dependencies: ["LinkedInCommentAssistantCore"]
+            dependencies: ["LinkedInCommentAssistantCore"],
+            resources: [.copy("Resources/AppIcon.icns")]
         ),
         .testTarget(
             name: "LinkedInCommentAssistantTests",

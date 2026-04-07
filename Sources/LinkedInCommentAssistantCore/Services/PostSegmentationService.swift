@@ -56,21 +56,26 @@ public final class PostSegmentationService {
     }
 
     public func feedRegionBlocks(from blocks: [OCRBlock], imageSize: CGSize) -> [OCRBlock] {
-        let region = estimatedFeedRegion(from: blocks, imageSize: imageSize)
-
-        return blocks.filter { block in
-            let frame = block.frame
-            let horizontalIntersection = frame.intersection(region).width
-            return horizontalIntersection >= max(frame.width * 0.25, 18) &&
-                frame.maxY > region.minY &&
-                frame.minY < region.maxY
-        }
+        feedRegionBlocks(from: blocks, imageSize: imageSize, feedRegion: estimatedFeedRegion(from: blocks, imageSize: imageSize))
     }
 
     public func feedCandidateBlocks(from blocks: [OCRBlock], imageSize: CGSize) -> [OCRBlock] {
+        feedCandidateBlocks(from: blocks, imageSize: imageSize, feedRegion: estimatedFeedRegion(from: blocks, imageSize: imageSize))
+    }
+
+    private func feedRegionBlocks(from blocks: [OCRBlock], imageSize: CGSize, feedRegion: CGRect) -> [OCRBlock] {
+        blocks.filter { block in
+            let frame = block.frame
+            let horizontalIntersection = frame.intersection(feedRegion).width
+            return horizontalIntersection >= max(frame.width * 0.25, 18) &&
+                frame.maxY > feedRegion.minY &&
+                frame.minY < feedRegion.maxY
+        }
+    }
+
+    private func feedCandidateBlocks(from blocks: [OCRBlock], imageSize: CGSize, feedRegion: CGRect) -> [OCRBlock] {
         let topChromeCutoff = inferredTopChromeCutoff(from: blocks, imageSize: imageSize)
         let bottomCutoff = imageSize.height * 0.985
-        let feedRegion = estimatedFeedRegion(from: blocks, imageSize: imageSize)
 
         return blocks.filter { block in
             let frame = block.frame
@@ -102,9 +107,9 @@ public final class PostSegmentationService {
         classifier: LinkedInContextClassifier
     ) -> PostDetectionResult {
         let feedRegion = estimatedFeedRegion(from: blocks, imageSize: imageSize)
-        let candidateBlocks = feedCandidateBlocks(from: blocks, imageSize: imageSize)
+        let candidateBlocks = feedCandidateBlocks(from: blocks, imageSize: imageSize, feedRegion: feedRegion)
         let centralBlocks = {
-            let regionBlocks = feedRegionBlocks(from: blocks, imageSize: imageSize)
+            let regionBlocks = feedRegionBlocks(from: blocks, imageSize: imageSize, feedRegion: feedRegion)
             return regionBlocks.isEmpty ? candidateBlocks : regionBlocks
         }()
             .sorted { $0.frame.minY < $1.frame.minY }
@@ -126,7 +131,7 @@ public final class PostSegmentationService {
             let averageConfidence = cluster.map(\.averageConfidence).reduce(0, +) / Double(cluster.count)
 
             let centerXScore = 1 - min(abs(frame.midX - feedRegion.midX) / max(feedRegion.width * 0.5, 1), 1)
-            let centerYScore = 1 - min(abs(frame.midY - imageSize.height * 0.48) / (imageSize.height * 0.48), 1)
+            let centerYScore = 1 - min(abs(frame.midY - imageSize.height * 0.48) / max(imageSize.height * 0.48, 1), 1)
             let densityScore = min(Double(wordCount) / 90.0, 1.0)
             let areaScore = min(Double(frame.area / max(feedRegion.area * 0.32, 1)), 1.0)
             let anchorScore = min(Double(anchors.count) / 4.0, 1.0)
@@ -234,7 +239,7 @@ public final class PostSegmentationService {
     private func blockWeight(for block: OCRBlock, imageSize: CGSize) -> Double {
         let words = max(wordCount(in: block.text), 2)
         let widthFactor = max(Double(block.frame.width / max(imageSize.width * 0.14, 1)), 0.5)
-        let centrality = 1 - min(abs(block.frame.midX - imageSize.width * 0.44) / (imageSize.width * 0.44), 1)
+        let centrality = 1 - min(abs(block.frame.midX - imageSize.width * 0.44) / max(imageSize.width * 0.44, 1), 1)
         return Double(words) * min(widthFactor, 2.2) * (0.4 + centrality)
     }
 

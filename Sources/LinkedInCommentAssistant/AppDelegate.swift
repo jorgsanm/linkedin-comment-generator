@@ -8,7 +8,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsWindowController = SettingsWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
+        // Hide the default empty window — the app lives in the menu bar + Dock
+        DispatchQueue.main.async {
+            for window in NSApp.windows where window.className.contains("AppKit") || window.title.isEmpty {
+                window.orderOut(nil)
+            }
+        }
+
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let iconImage = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = iconImage
+        }
 
         let model = AppModel.shared
         model.onPresentCompanion = { [weak self] frame in

@@ -12,33 +12,47 @@ public final class PromptAssembler {
     func assemble(request: GenerationRequest) -> PromptBundle {
         let profile = request.personaProfile
         let cappedExamples = Array(request.styleExamples.prefix(5))
+        let hasCustomContext = !request.additionalPromptContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isBuiltInPersona = profile.name == "Built-In Persona"
 
-        let instructions = """
-        You generate assistive LinkedIn comments based only on the visible OCR text from a post.
-        Follow the provided persona exactly.
+        var instructionParts: [String] = [
+            "You generate assistive LinkedIn comments based only on the visible OCR text from a post."
+        ]
 
-        Persona name: \(profile.name)
-        Voice:
-        \(profile.voice)
+        if hasCustomContext {
+            instructionParts.append("""
+            The user has provided custom guidelines below (in the "Extra context" section). \
+            These are the primary instructions for tone, voice, and content. Follow them closely.
+            """)
+        }
 
-        Tone:
-        \(profile.tone)
+        if !isBuiltInPersona || !hasCustomContext {
+            instructionParts.append("""
+            Persona name: \(profile.name)
+            Voice:
+            \(profile.voice)
 
-        Do:
-        \(profile.doRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+            Tone:
+            \(profile.tone)
 
-        Avoid:
-        \(profile.avoidRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+            Do:
+            \(profile.doRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
 
-        CTA rules:
-        \(profile.ctaRules.isEmpty ? "None" : profile.ctaRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+            Avoid:
+            \(profile.avoidRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
 
-        Banned phrases:
-        \(profile.bannedPhrases.isEmpty ? "None" : profile.bannedPhrases.joined(separator: ", "))
+            CTA rules:
+            \(profile.ctaRules.isEmpty ? "None" : profile.ctaRules.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
 
-        Audience:
-        \(profile.audience?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? profile.audience! : "Not specified")
+            Banned phrases:
+            \(profile.bannedPhrases.isEmpty ? "None" : profile.bannedPhrases.joined(separator: ", "))
 
+            Audience:
+            \(profile.audience?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? profile.audience! : "Not specified")
+            """)
+        }
+
+        instructionParts.append("""
         Constraints:
         - Return exactly 3 distinct comments.
         - Each comment must fit within \(profile.maxCommentSentences) sentence(s).
@@ -48,7 +62,9 @@ public final class PromptAssembler {
         - Treat the persona, extra context, and style examples as consistent instructions, not optional suggestions.
         - Do not claim to have read anything beyond the visible post text.
         - Do not add hashtags unless the post clearly demands them.
-        """
+        """)
+
+        let instructions = instructionParts.joined(separator: "\n\n")
 
         let examplesText: String
         if cappedExamples.isEmpty {

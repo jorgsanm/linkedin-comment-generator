@@ -62,11 +62,24 @@ public final class OCRService {
     private func preprocess(_ image: CGImage) -> CGImage {
         var ciImage = CIImage(cgImage: image)
 
-        if image.width < 1400 {
-            let scale = 1400 / max(CGFloat(image.width), 1)
+        let targetMinWidth: CGFloat = 1400
+        let targetMaxDimension: CGFloat = 4000
+        let longestSide = max(CGFloat(image.width), CGFloat(image.height))
+        let imageWidth = CGFloat(image.width)
+
+        let scale: Float?
+        if longestSide > targetMaxDimension {
+            scale = Float(targetMaxDimension / longestSide)
+        } else if imageWidth < targetMinWidth {
+            scale = Float(targetMinWidth / max(imageWidth, 1))
+        } else {
+            scale = nil
+        }
+
+        if let scale {
             let scaleFilter = CIFilter.lanczosScaleTransform()
             scaleFilter.inputImage = ciImage
-            scaleFilter.scale = Float(scale)
+            scaleFilter.scale = scale
             scaleFilter.aspectRatio = 1
             ciImage = scaleFilter.outputImage ?? ciImage
         }
