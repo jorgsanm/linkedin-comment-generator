@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(gh auth:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(swift build:*)",
+      "Bash(bash scripts/build-and-sign.sh)",
+      "Bash(open \"/Applications/LKD Comments.app\")",
+      "Bash(bash \"/Users/jorgesingular/Documents/0_Claude Projects/Linkedin Comment Generator/scripts/build-and-sign.sh\")",
+      "Bash(swift test:*)",
+      "Bash(xcrun swift:*)",
+      "Bash(xcode-select -p)",
+      "Read(//Applications/**)",
+      "Bash(pkill -x \"LKD Comments\")"
     ]
   }
 }

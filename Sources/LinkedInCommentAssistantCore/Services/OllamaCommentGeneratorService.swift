@@ -26,32 +26,47 @@ public final class OllamaCommentGeneratorService: CommentGeneratorService {
         }
 
         let prompt = promptAssembler.assemble(request: request)
+        let jsonTemplate: String
+        if prompt.expectedCandidateCount == 1 {
+            jsonTemplate = """
+            {
+              "candidates": [
+                {
+                  "id": "1",
+                  "text": "your comment here",
+                  "lengthCategory": "medium"
+                }
+              ]
+            }
+            """
+        } else {
+            jsonTemplate = """
+            {
+              "candidates": [
+                {
+                  "id": "1",
+                  "text": "your comment here",
+                  "lengthCategory": "short"
+                },
+                {
+                  "id": "2",
+                  "text": "your comment here",
+                  "lengthCategory": "medium"
+                },
+                {
+                  "id": "3",
+                  "text": "your comment here",
+                  "lengthCategory": "expanded"
+                }
+              ]
+            }
+            """
+        }
         let fullPrompt = """
         \(prompt.instructions)
 
         You MUST return ONLY a JSON object matching this exact structure (no other text):
-        {
-          "candidates": [
-            {
-              "id": "1",
-              "text": "your comment here",
-              "rationale": "why this comment works",
-              "lengthCategory": "short"
-            },
-            {
-              "id": "2",
-              "text": "your comment here",
-              "rationale": "why this comment works",
-              "lengthCategory": "medium"
-            },
-            {
-              "id": "3",
-              "text": "your comment here",
-              "rationale": "why this comment works",
-              "lengthCategory": "expanded"
-            }
-          ]
-        }
+        \(jsonTemplate)
 
         lengthCategory must be one of: "short", "medium", "expanded"
 

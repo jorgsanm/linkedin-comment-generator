@@ -67,7 +67,8 @@ public final class OpenAICommentGeneratorService: CommentGeneratorService {
             .compactMap(\.text)
             .joined(separator: "\n")
 
-        return try parseCandidates(from: jsonText)
+        let prompt = promptAssembler.assemble(request: request)
+        return try parseCandidates(from: jsonText, expectedCount: prompt.expectedCandidateCount)
     }
 
     func buildRequestBody(for request: GenerationRequest, provider: ProviderSettings) throws -> Data {
@@ -98,7 +99,7 @@ public final class OpenAICommentGeneratorService: CommentGeneratorService {
         return try encoder.encode(body)
     }
 
-    func parseCandidates(from jsonText: String) throws -> [GeneratedCandidate] {
+    func parseCandidates(from jsonText: String, expectedCount: Int = 3) throws -> [GeneratedCandidate] {
         guard !jsonText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AppError.generationFailed("The model returned an empty response.")
         }
@@ -122,15 +123,14 @@ public final class OpenAICommentGeneratorService: CommentGeneratorService {
             }
         }
 
-        guard envelope.candidates.count == 3 else {
-            throw AppError.generationFailed("The model did not return exactly 3 comment candidates.")
+        guard envelope.candidates.count == expectedCount else {
+            throw AppError.generationFailed("The model did not return exactly \(expectedCount) comment candidate(s).")
         }
 
         return envelope.candidates.map {
             GeneratedCandidate(
                 id: $0.id,
                 text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                rationale: $0.rationale.trimmingCharacters(in: .whitespacesAndNewlines),
                 lengthCategory: $0.lengthCategory
             )
         }
@@ -246,6 +246,5 @@ private struct GeneratedCandidatesEnvelope: Decodable {
 private struct GeneratedCandidatePayload: Decodable {
     var id: String
     var text: String
-    var rationale: String
     var lengthCategory: CommentLengthCategory
 }

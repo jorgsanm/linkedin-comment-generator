@@ -7,7 +7,7 @@ public final class ReadingModeOverlayController: NSObject {
     private enum Layout {
         static let minimumSelectionSize = CGSize(width: 260, height: 180)
         static let screenPadding: CGFloat = 14
-        static let toolbarSize = CGSize(width: 430, height: 126)
+        static let toolbarSize = CGSize(width: 380, height: 44)
         static let moveHandleSize = CGSize(width: 152, height: 34)
         static let resizeHandleSize: CGFloat = 18
         static let controlSpacing: CGFloat = 12
@@ -277,30 +277,42 @@ public final class ReadingModeOverlayController: NSObject {
     }
 
     private func toolbarFrame(for selection: CGRect, on screen: NSScreen) -> CGRect {
+        // Anchor the toolbar to the reading selection's top-right corner, just
+        // above the box — tracking it the same way the Move Box handle does.
+        // Fallbacks:
+        //   1. If there's no vertical room above the box, flip below it.
+        //   2. If either axis still fails to fit, clamp to visible bounds
+        //      (this degrades gracefully into "top-left of screen" for a box
+        //      pressed against the top-right corner of the display).
+        let bounds = constrainedBounds(for: screen)
+        let size = Layout.toolbarSize
+
+        var origin = CGPoint(
+            x: selection.maxX - size.width,
+            y: selection.maxY + Layout.controlSpacing
+        )
+
+        if origin.y + size.height > bounds.maxY {
+            origin.y = selection.minY - Layout.controlSpacing - size.height
+        }
+
+        origin.x = min(max(origin.x, bounds.minX), bounds.maxX - size.width)
+        origin.y = min(max(origin.y, bounds.minY), bounds.maxY - size.height)
+        return CGRect(origin: origin, size: size).integral
+    }
+
+    private func moveHandleFrame(for selection: CGRect, on screen: NSScreen) -> CGRect {
+        // Prefer placing the Move Box handle BELOW the selection so it stays
+        // clear of the (now box-anchored) toolbar sitting above the box.
+        // Falls back to above the selection if there is no room below.
         let bounds = constrainedBounds(for: screen)
         var origin = CGPoint(
-            x: selection.midX - Layout.toolbarSize.width / 2,
-            y: selection.minY - Layout.toolbarSize.height - Layout.controlSpacing
+            x: selection.midX - Layout.moveHandleSize.width / 2,
+            y: selection.minY - Layout.moveHandleSize.height - Layout.controlSpacing
         )
 
         if origin.y < bounds.minY {
             origin.y = selection.maxY + Layout.controlSpacing
-        }
-
-        origin.x = min(max(origin.x, bounds.minX), bounds.maxX - Layout.toolbarSize.width)
-        origin.y = min(max(origin.y, bounds.minY), bounds.maxY - Layout.toolbarSize.height)
-        return CGRect(origin: origin, size: Layout.toolbarSize).integral
-    }
-
-    private func moveHandleFrame(for selection: CGRect, on screen: NSScreen) -> CGRect {
-        let bounds = constrainedBounds(for: screen)
-        var origin = CGPoint(
-            x: selection.midX - Layout.moveHandleSize.width / 2,
-            y: selection.maxY + Layout.controlSpacing
-        )
-
-        if origin.y + Layout.moveHandleSize.height > bounds.maxY {
-            origin.y = selection.maxY - Layout.moveHandleSize.height - Layout.controlSpacing
         }
 
         origin.x = min(max(origin.x, bounds.minX), bounds.maxX - Layout.moveHandleSize.width)
@@ -577,7 +589,7 @@ private final class ReadingSelectionHandleView: NSView {
 }
 
 private struct ReadingModeToolbarView: View {
-    private let toolbarSize = CGSize(width: 430, height: 126)
+    private let toolbarSize = CGSize(width: 380, height: 44)
 
     @ObservedObject var model: AppModel
     let onScan: () -> Void
@@ -587,46 +599,48 @@ private struct ReadingModeToolbarView: View {
     let onExit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Reading mode")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.primary)
-
-            Text("Scroll normally. OCR only reads text inside the box. Drag the Move Box chip or center it here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button("Center Box", action: onCenterBox)
-                        .buttonStyle(.bordered)
-
-                    Button("Scan Selection", action: onScan)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.isScanning)
-
-                    Button("Scan + Generate", action: onScanAndGenerate)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.isScanning || model.isGenerating)
-                }
-
-                HStack(spacing: 8) {
-                    Button("Generate", action: onGenerate)
-                        .buttonStyle(.bordered)
-                        .disabled(!model.canGenerate || model.isScanning)
-
-                    Button("Exit", action: onExit)
-                        .buttonStyle(.bordered)
-                }
+        HStack(spacing: 6) {
+            Button(action: onCenterBox) {
+                Label("Center", systemImage: "scope")
             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Button(action: onScan) {
+                Label("Scan", systemImage: "viewfinder")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(model.isScanning)
+
+            Button(action: onScanAndGenerate) {
+                Label("Scan + Set", systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(model.isScanning || model.isGenerating)
+
+            Button(action: onGenerate) {
+                Label("New Set", systemImage: "sparkles")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!model.canGenerate || model.isScanning)
+
+            Button(action: onExit) {
+                Label("Exit", systemImage: "xmark")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
-        .padding(14)
-        .frame(width: toolbarSize.width, height: toolbarSize.height, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .frame(width: toolbarSize.width, height: toolbarSize.height, alignment: .center)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+        .shadow(color: Color.black.opacity(0.14), radius: 10, x: 0, y: 6)
     }
 }

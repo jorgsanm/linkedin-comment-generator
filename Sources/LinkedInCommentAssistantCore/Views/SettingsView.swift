@@ -403,8 +403,6 @@ public struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                Toggle("Collapse the overlay after copying a candidate", isOn: settingsBinding(\.collapseAfterCopy))
-
                 Picker("Overlay side", selection: settingsBinding(\.overlayEdge)) {
                     ForEach(OverlayEdge.allCases) { edge in
                         Text(edge.displayName).tag(edge)

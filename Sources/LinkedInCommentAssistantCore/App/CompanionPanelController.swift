@@ -46,9 +46,12 @@ public final class CompanionPanelController: NSObject {
     }
 
     private func applyLayout(to panel: NSPanel, model: AppModel, near sourceWindowFrame: CGRect?, animated: Bool) {
-        let panelSize = model.overlayPanelSize
         guard let screen = resolvedScreen(near: sourceWindowFrame) else { return }
         let visibleFrame = screen.visibleFrame
+
+        // Take width from the model; height always comes from the resolved screen
+        // so the panel is correctly sized on mixed-height multi-display setups.
+        let panelSize = CGSize(width: model.overlayPanelWidth, height: visibleFrame.height)
 
         let x: CGFloat
         switch model.overlayEdge {
@@ -63,16 +66,21 @@ public final class CompanionPanelController: NSObject {
     }
 
     private func resolvedScreen(near sourceWindowFrame: CGRect?) -> NSScreen? {
-        if let sourceWindowFrame,
-           let matchingScreen = NSScreen.screens.first(where: { $0.frame.intersects(sourceWindowFrame) }) {
-            return matchingScreen
+        if let sourceWindowFrame {
+            var bestScreen: NSScreen?
+            var bestArea: CGFloat = 0
+            for candidate in NSScreen.screens {
+                let intersection = candidate.frame.intersection(sourceWindowFrame)
+                if intersection.isNull { continue }
+                let area = intersection.width * intersection.height
+                if area > bestArea {
+                    bestArea = area
+                    bestScreen = candidate
+                }
+            }
+            if let bestScreen { return bestScreen }
         }
-
-        if let mainScreen = NSScreen.main {
-            return mainScreen
-        }
-
-        return NSScreen.screens.first
+        return NSScreen.main ?? NSScreen.screens.first
     }
 }
 

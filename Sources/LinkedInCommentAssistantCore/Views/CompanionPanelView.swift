@@ -40,53 +40,55 @@ public struct CompanionPanelView: View {
         model.overlayEdge == .right ? .trailing : .leading
     }
 
-    // MARK: - Collapsed: Full-Height Clickable Strip
+    // MARK: - Collapsed: Only the pill tab is clickable
 
     private var edgeStrip: some View {
-        Button {
-            model.toggleOverlayExpanded()
-        } label: {
-            ZStack {
-                // Full-height invisible click target
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Visible pill tab in the center
-                VStack(spacing: 4) {
-                    Image(systemName: toggleChevron)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 20, height: 56)
-                .background(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.45, green: 0.62, blue: 0.98),
-                            Color(red: 0.28, green: 0.42, blue: 0.88)
-                        ],
-                        startPoint: .top, endPoint: .bottom
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Button {
+                model.toggleOverlayExpanded()
+            } label: {
+                Image(systemName: toggleChevron)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 56)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.45, green: 0.62, blue: 0.98),
+                                Color(red: 0.28, green: 0.42, blue: 0.88)
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
                     )
-                )
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: model.overlayEdge == .right ? 10 : 0,
-                        bottomLeadingRadius: model.overlayEdge == .right ? 10 : 0,
-                        bottomTrailingRadius: model.overlayEdge == .right ? 0 : 10,
-                        topTrailingRadius: model.overlayEdge == .right ? 0 : 10
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                            bottomLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                            bottomTrailingRadius: model.overlayEdge == .right ? 0 : 10,
+                            topTrailingRadius: model.overlayEdge == .right ? 0 : 10
+                        )
                     )
-                )
-                .shadow(color: Color.black.opacity(0.15), radius: 6, x: model.overlayEdge == .right ? -2 : 2, y: 0)
-                .scaleEffect(isHoveringTab ? 1.08 : 1.0)
-                .animation(.easeInOut(duration: 0.15), value: isHoveringTab)
+                    .shadow(color: Color.black.opacity(0.15), radius: 6, x: model.overlayEdge == .right ? -2 : 2, y: 0)
+                    .scaleEffect(isHoveringTab ? 1.08 : 1.0)
+                    .animation(.easeInOut(duration: 0.15), value: isHoveringTab)
+                    .contentShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                            bottomLeadingRadius: model.overlayEdge == .right ? 10 : 0,
+                            bottomTrailingRadius: model.overlayEdge == .right ? 0 : 10,
+                            topTrailingRadius: model.overlayEdge == .right ? 0 : 10
+                        )
+                    )
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                isHoveringTab = hovering
+            }
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
         .frame(width: 28)
         .frame(maxHeight: .infinity)
-        .onHover { hovering in
-            isHoveringTab = hovering
-        }
     }
 
     // MARK: - Expanded Sidebar
@@ -277,7 +279,7 @@ public struct CompanionPanelView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: model.generatedCandidates.isEmpty ? "sparkles" : "arrow.clockwise")
-                        Text(model.generatedCandidates.isEmpty ? "Generate" : "Regenerate")
+                        Text(model.generatedCandidates.isEmpty ? "Generate" : "Generate New Set")
                     }
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
@@ -443,7 +445,7 @@ public struct CompanionPanelView: View {
             } else {
                 ForEach(model.generatedCandidates) { candidate in
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: 6) {
                             Text(candidate.lengthCategory.rawValue.capitalized)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
@@ -468,21 +470,32 @@ public struct CompanionPanelView: View {
                                 .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
+
+                            Button {
+                                model.regenerate(candidate: candidate)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    if model.regeneratingCandidateID == candidate.id {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    Text("Regen")
+                                }
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color(red: 0.55, green: 0.32, blue: 0.85))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(red: 0.96, green: 0.93, blue: 1.0))
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!model.canRegenerate || model.regeneratingCandidateID == candidate.id)
                         }
 
                         Text(candidate.text)
                             .font(.callout)
                             .fixedSize(horizontal: false, vertical: true)
-
-                        if !candidate.rationale.isEmpty {
-                            DisclosureGroup("Why this comment") {
-                                Text(candidate.rationale)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        }
                     }
                     .padding(12)
                     .background(Color.white.opacity(0.82))

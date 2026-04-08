@@ -9,9 +9,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // Hide the default empty window — the app lives in the menu bar + Dock
+        // Hide the default empty SwiftUI placeholder window that .regular activation
+        // policy creates. Skip NSPanel instances so we don't accidentally hide our
+        // own overlay panels (CompanionPanelController, ReadingModeOverlayController).
         DispatchQueue.main.async {
-            for window in NSApp.windows where window.className.contains("AppKit") || window.title.isEmpty {
+            for window in NSApp.windows where !(window is NSPanel) && window.title.isEmpty {
                 window.orderOut(nil)
             }
         }

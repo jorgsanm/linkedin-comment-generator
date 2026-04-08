@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 
 public enum CommentIntent: String, CaseIterable, Codable, Identifiable, Sendable {
+    case free
     case agree
     case disagree
     case askQuestion
@@ -11,6 +12,8 @@ public enum CommentIntent: String, CaseIterable, Codable, Identifiable, Sendable
 
     public var displayName: String {
         switch self {
+        case .free:
+            return "Free to choose"
         case .agree:
             return "Agree"
         case .disagree:
@@ -22,6 +25,25 @@ public enum CommentIntent: String, CaseIterable, Codable, Identifiable, Sendable
         }
     }
 
+    /// Per-intent prompt guidance block appended near the end of the LLM
+    /// instructions so it has strong recency weight. Small models sometimes
+    /// ignore a one-line intent mention; this block gives them explicit,
+    /// concrete rules for each stance.
+    public var promptGuidance: String {
+        switch self {
+        case .free:
+            return "Choose whichever stance — agree, disagree, ask a question, congratulate, or add perspective — best fits the post on its own merits. Do NOT default to agreement. Pick what a thoughtful reader would actually say."
+        case .agree:
+            return "ALL 3 comments must express genuine agreement with a specific, concrete point made in the post. Name the specific idea you're agreeing with. Do NOT just add generic praise like 'great post'."
+        case .disagree:
+            return "ALL 3 comments must respectfully challenge or add a counterpoint to something specific the post claims. Be constructive, not hostile. Each must clearly be a disagreement, not a mild caveat."
+        case .askQuestion:
+            return "ALL 3 comments MUST be phrased as actual questions directed at the author or audience. Every single comment text MUST contain at least one question mark ('?') and MUST be a real question, not a statement with a tag question tacked on. No declarative comments."
+        case .congratulate:
+            return "ALL 3 comments must congratulate the author on the specific achievement, milestone, or launch described in the post. Name what you're congratulating them on. Do NOT ask questions or disagree."
+        }
+    }
+
     public init?(slug: String) {
         let normalized = slug
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,6 +52,8 @@ public enum CommentIntent: String, CaseIterable, Codable, Identifiable, Sendable
             .replacingOccurrences(of: "-", with: " ")
 
         switch normalized {
+        case "free", "free to choose", "any", "auto", "none":
+            self = .free
         case "agree":
             self = .agree
         case "disagree":
@@ -112,9 +136,11 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
 
 public struct ProviderSettings: Codable, Equatable, Sendable {
     public static let openAIModelPresets: [String] = [
-        "gpt-5", "gpt-5-mini", "gpt-5.3-mini",
+        "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano",
+        "gpt-5", "gpt-5-pro", "gpt-5-mini", "gpt-5-nano",
         "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-        "o3-mini", "o4-mini"
+        "o3-pro", "o3", "o4-mini", "o3-mini", "o1-pro", "o1",
+        "gpt-4o", "gpt-4o-mini"
     ]
 
     public var kind: ProviderKind
@@ -173,7 +199,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var defaultIntent: CommentIntent
     public var defaultLanguage: CommentLanguage
     public var customLanguageName: String
-    public var collapseAfterCopy: Bool
     public var debugLoggingEnabled: Bool
     public var firstLaunchCompleted: Bool
     public var hotKey: HotKeyConfiguration
@@ -189,7 +214,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         defaultIntent: CommentIntent = .agree,
         defaultLanguage: CommentLanguage = .sameAsPost,
         customLanguageName: String = "",
-        collapseAfterCopy: Bool = true,
         debugLoggingEnabled: Bool = false,
         firstLaunchCompleted: Bool = false,
         hotKey: HotKeyConfiguration = .defaultScanHotKey,
@@ -204,7 +228,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.defaultIntent = defaultIntent
         self.defaultLanguage = defaultLanguage
         self.customLanguageName = customLanguageName
-        self.collapseAfterCopy = collapseAfterCopy
         self.debugLoggingEnabled = debugLoggingEnabled
         self.firstLaunchCompleted = firstLaunchCompleted
         self.hotKey = hotKey
@@ -445,6 +468,13 @@ public struct GenerationRequest: Sendable {
     public var personaProfile: PersonaProfile
     public var styleExamples: [StyleCorpusEntry]
     public var additionalPromptContext: String
+    /// When non-nil, the assembler produces a single-candidate rework prompt
+    /// that asks the model to keep the spirit/voice of the given text but
+    /// write a slightly different angle.
+    public var reworkTarget: String?
+    /// When non-nil, the assembler appends a trailing retry-feedback block to
+    /// the user message so the second attempt knows what went wrong.
+    public var retryFeedback: String?
 
     public init(
         postText: String,
@@ -456,7 +486,9 @@ public struct GenerationRequest: Sendable {
         uniqueThought: String,
         personaProfile: PersonaProfile,
         styleExamples: [StyleCorpusEntry],
-        additionalPromptContext: String
+        additionalPromptContext: String,
+        reworkTarget: String? = nil,
+        retryFeedback: String? = nil
     ) {
         self.postText = postText
         self.ocrConfidence = ocrConfidence
@@ -468,6 +500,8 @@ public struct GenerationRequest: Sendable {
         self.personaProfile = personaProfile
         self.styleExamples = styleExamples
         self.additionalPromptContext = additionalPromptContext
+        self.reworkTarget = reworkTarget
+        self.retryFeedback = retryFeedback
     }
 
     public var resolvedLanguageLabel: String {
@@ -492,18 +526,15 @@ public struct GenerationRequest: Sendable {
 public struct GeneratedCandidate: Identifiable, Codable, Equatable, Sendable {
     public var id: String
     public var text: String
-    public var rationale: String
     public var lengthCategory: CommentLengthCategory
 
     public init(
         id: String,
         text: String,
-        rationale: String,
         lengthCategory: CommentLengthCategory
     ) {
         self.id = id
         self.text = text
-        self.rationale = rationale
         self.lengthCategory = lengthCategory
     }
 }

@@ -4,6 +4,9 @@ struct PromptBundle {
     var instructions: String
     var userMessage: String
     var schema: JSONValue
+    /// How many candidates callers should expect back from the model. 3 for a
+    /// normal generate, 1 for a single-candidate rework.
+    var expectedCandidateCount: Int
 }
 
 public final class PromptAssembler {
@@ -14,6 +17,8 @@ public final class PromptAssembler {
         let cappedExamples = Array(request.styleExamples.prefix(5))
         let hasCustomContext = !request.additionalPromptContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let isBuiltInPersona = profile.name == "Built-In Persona"
+        let isRework = request.reworkTarget != nil
+        let expectedCount = isRework ? 1 : 3
 
         var instructionParts: [String] = [
             "You generate assistive LinkedIn comments based only on the visible OCR text from a post."
@@ -52,16 +57,37 @@ public final class PromptAssembler {
             """)
         }
 
+        let countConstraint: String
+        if isRework {
+            countConstraint = "- Return exactly 1 comment."
+        } else {
+            countConstraint = "- Return exactly 3 distinct comments."
+        }
+
         instructionParts.append("""
         Constraints:
-        - Return exactly 3 distinct comments.
+        \(countConstraint)
         - Each comment must fit within \(profile.maxCommentSentences) sentence(s).
         - Keep the tone human and natural.
-        - Honor the requested comment intent exactly.
         - Write every candidate entirely in the requested language. Do not mix languages unless the request explicitly asks for it.
         - Treat the persona, extra context, and style examples as consistent instructions, not optional suggestions.
         - Do not claim to have read anything beyond the visible post text.
         - Do not add hashtags unless the post clearly demands them.
+        """)
+
+        if isRework {
+            instructionParts.append("""
+            You are reworking the existing comment below. Keep the same spirit, voice, and tone. \
+            Produce ONE new variation that tries a slightly different angle but does not contradict \
+            the original. Do not change the language.
+            """)
+        }
+
+        // Per-intent guidance block (Fix 5). Appended last so it has the highest
+        // recency weight in the instruction string.
+        instructionParts.append("""
+        Comment intent — \(request.intent.displayName):
+        \(request.intent.promptGuidance)
         """)
 
         let instructions = instructionParts.joined(separator: "\n\n")
@@ -77,12 +103,20 @@ public final class PromptAssembler {
                 .joined(separator: "\n")
         }
 
-        let userMessage = """
+        let intentLine: String
+        switch request.intent {
+        case .free:
+            intentLine = "Comment intent: Not specified — choose the most fitting stance based on the post."
+        default:
+            intentLine = "Comment intent: \(request.intent.displayName)"
+        }
+
+        var userMessage = """
         Visible post text:
         \(request.postText)
 
         OCR confidence: \(String(format: "%.2f", request.ocrConfidence))
-        Comment intent: \(request.intent.displayName)
+        \(intentLine)
         Requested language: \(request.resolvedLanguageLabel)
         Unique thought to weave in: \(request.uniqueThought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "None" : request.uniqueThought)
         Extra context and prompt notes:
@@ -90,6 +124,15 @@ public final class PromptAssembler {
         Style examples:
         \(examplesText)
         """
+
+        if let reworkTarget = request.reworkTarget {
+            userMessage += "\n\nOriginal comment to rework: «\(reworkTarget)»"
+        }
+
+        if let feedback = request.retryFeedback,
+           !feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            userMessage += "\n\nIMPORTANT — previous attempt failed: \(feedback) Fix this in the next attempt."
+        }
 
         return PromptBundle(
             instructions: instructions,
@@ -103,8 +146,8 @@ public final class PromptAssembler {
                             "candidates": .object(
                                 [
                                     "type": .string("array"),
-                                    "minItems": .number(3),
-                                    "maxItems": .number(3),
+                                    "minItems": .number(Double(expectedCount)),
+                                    "maxItems": .number(Double(expectedCount)),
                                     "items": .object(
                                         [
                                             "type": .string("object"),
@@ -113,7 +156,6 @@ public final class PromptAssembler {
                                                 [
                                                     "id": .object(["type": .string("string")]),
                                                     "text": .object(["type": .string("string")]),
-                                                    "rationale": .object(["type": .string("string")]),
                                                     "lengthCategory": .object(
                                                         [
                                                             "type": .string("string"),
@@ -129,7 +171,6 @@ public final class PromptAssembler {
                                             "required": .array([
                                                 .string("id"),
                                                 .string("text"),
-                                                .string("rationale"),
                                                 .string("lengthCategory")
                                             ])
                                         ]
@@ -140,7 +181,8 @@ public final class PromptAssembler {
                     ),
                     "required": .array([.string("candidates")])
                 ]
-            )
+            ),
+            expectedCandidateCount: expectedCount
         )
     }
 }

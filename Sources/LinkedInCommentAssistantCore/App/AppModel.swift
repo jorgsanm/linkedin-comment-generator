@@ -38,6 +38,13 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var generatedCandidates: [GeneratedCandidate] = []
     @Published public private(set) var isScanning = false
     @Published public private(set) var isGenerating = false
+    @Published public private(set) var regeneratingCandidateID: String? = nil
+    /// Set to `true` for the duration of the UI update following a
+    /// validator-triggered retry of the previous generation, otherwise `false`.
+    /// Tests and manual verification use this as the reliable retry indicator —
+    /// `statusMessage` is not reliable because a successful retry ends up
+    /// showing the normal success message.
+    @Published public private(set) var lastGenerationDidRetry: Bool = false
     @Published public var editablePostText: String = ""
     @Published public var selectedIntent: CommentIntent
     @Published public var selectedLanguage: CommentLanguage
@@ -72,9 +79,11 @@ public final class AppModel: ObservableObject {
     private let clipboardService: ClipboardService
     private let hotKeyMonitor: HotKeyMonitor
     private var activeGenerationTask: Task<Void, Never>?
+    private var activeRegenerationTask: Task<Void, Never>?
     private var activeScanTask: Task<Void, Never>?
     private var activationObserver: NSObjectProtocol?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
     private var lastCompanionAnchorFrame: CGRect?
     private var lastKnownSupportedBrowserBundleIdentifier: String?
 
@@ -117,7 +126,14 @@ public final class AppModel: ObservableObject {
     }
 
     public var canGenerate: Bool {
-        generationBlockers.isEmpty && !isGenerating
+        generationBlockers.isEmpty && !isGenerating && regeneratingCandidateID == nil
+    }
+
+    /// True when a single-candidate regeneration can start right now.
+    /// First-click-wins semantics: while a regen is in flight, further clicks
+    /// are no-ops (no cancel) and full-set generates are blocked too.
+    public var canRegenerate: Bool {
+        !isGenerating && regeneratingCandidateID == nil && generationBlockers.isEmpty
     }
 
     public var currentWarnings: [String] {
@@ -197,12 +213,8 @@ public final class AppModel: ObservableObject {
         settings.overlayEdge
     }
 
-    public var overlayPanelSize: CGSize {
-        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
-        if !isOverlayExpanded {
-            return CGSize(width: 28, height: screenHeight)
-        }
-        return CGSize(width: 340, height: screenHeight)
+    public var overlayPanelWidth: CGFloat {
+        isOverlayExpanded ? 340 : 28
     }
 
     public func start() {
@@ -211,6 +223,7 @@ public final class AppModel: ObservableObject {
         hasStoredAPIKey = keychainService.loadAPIKey() != nil
         refreshProviderHealth()
         startObservingApplicationActivation()
+        startObservingScreenParameters()
         startTrackingActiveApplications()
 
         hotKeyMonitor.onTrigger = { [weak self] in
@@ -249,6 +262,7 @@ public final class AppModel: ObservableObject {
 
     public func triggerGenerate() {
         guard !isGenerating else { return }
+        guard regeneratingCandidateID == nil else { return }
         activeGenerationTask = Task { @MainActor in
             await self.generateComments()
         }
@@ -256,8 +270,19 @@ public final class AppModel: ObservableObject {
 
     public func triggerScanAndGenerate() {
         guard !isGenerating else { return }
+        guard regeneratingCandidateID == nil else { return }
         activeGenerationTask = Task { @MainActor in
             await self.scanThenGenerate()
+        }
+    }
+
+    /// Entry point for the per-row Regenerate button. First click wins:
+    /// subsequent clicks while a regen is in flight are pure no-ops (we do
+    /// NOT cancel the active regen task).
+    public func regenerate(candidate: GeneratedCandidate) {
+        guard canRegenerate else { return }
+        activeRegenerationTask = Task { @MainActor in
+            await self.reworkCandidate(candidate)
         }
     }
 
@@ -333,6 +358,20 @@ public final class AppModel: ObservableObject {
 
         var copy = settings
         copy.readingSelectionFrame = normalizedFrame
+        settings = copy
+    }
+
+    /// Clears the reading selection both from the published state and the
+    /// persisted settings. Used when a display change invalidates the stored
+    /// selection rect (e.g. a monitor is disconnected and the frame no longer
+    /// maps to any attached screen).
+    public func clearReadingSelection() {
+        readingSelectionFrame = nil
+
+        guard settings.readingSelectionFrame != nil else { return }
+
+        var copy = settings
+        copy.readingSelectionFrame = nil
         settings = copy
     }
 
@@ -475,11 +514,6 @@ public final class AppModel: ObservableObject {
     public func copy(candidate: GeneratedCandidate) {
         clipboardService.copy(candidate.text)
         statusMessage = "Copied candidate to clipboard."
-
-        if settings.collapseAfterCopy {
-            isOverlayExpanded = false
-            presentCurrentCompanion()
-        }
     }
 
     public func copyBestCandidate() {
@@ -503,7 +537,11 @@ public final class AppModel: ObservableObject {
     public func moveOverlay(by verticalDelta: CGFloat) {
         guard let screen = preferredOverlayScreen() else { return }
         let visibleFrame = screen.visibleFrame.insetBy(dx: 12, dy: 24)
-        let travel = max(visibleFrame.height - overlayPanelSize.height, 1)
+        // Panel height is always the resolved screen's visibleFrame height; travel
+        // equals 0 by definition since the panel already spans the visible frame.
+        // Guard against non-positive travel by taking max with 1.
+        let panelHeight = screen.visibleFrame.height
+        let travel = max(visibleFrame.height - panelHeight, 1)
         let ratioDelta = Double(verticalDelta / travel)
         var copy = settings
         copy.overlayVerticalPosition = min(max(copy.overlayVerticalPosition + ratioDelta, 0), 1)
@@ -657,30 +695,7 @@ public final class AppModel: ObservableObject {
     private func generateComments() async {
         guard !Task.isCancelled else { return }
 
-        let personaProfile = resolvedPersona
-
-        let apiKey: String?
-        switch settings.provider.kind {
-        case .openAI:
-            guard let storedAPIKey = keychainService.loadAPIKey(), !storedAPIKey.isEmpty else {
-                errorMessage = AppError.missingAPIKey.localizedDescription
-                return
-            }
-            apiKey = storedAPIKey
-        case .ollama:
-            await evaluateProviderHealth()
-            switch localProviderHealth {
-            case .ready, .unknown, .resourceRisk:
-                break
-            case .checking:
-                errorMessage = "Local provider check is still running. Try again in a moment."
-                return
-            case .unavailable, .modelMissing, .invalidEndpoint:
-                errorMessage = localProviderHealthMessage
-                return
-            }
-            apiKey = nil
-        }
+        guard let apiKey = await resolveAPIKeyOrReport() else { return }
 
         let postText = editablePostText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !postText.isEmpty else {
@@ -692,19 +707,137 @@ public final class AppModel: ObservableObject {
         errorMessage = nil
         statusMessage = "Generating comment candidates…"
         generatedCandidates = []
+        applyRetryMetadata(didRetry: false)
         presentCurrentCompanion()
 
         defer { isGenerating = false }
 
+        let request = buildGenerationRequest(postText: postText, reworkTarget: nil)
+
+        do {
+            let result = try await performGenerationWithRetry(
+                request: request,
+                apiKey: apiKey,
+                provider: settings.provider
+            )
+            guard !Task.isCancelled else { return }
+            generatedCandidates = result.candidates
+            applyRetryMetadata(didRetry: result.didRetry)
+
+            // If the second attempt STILL fails validation for the question
+            // case, surface a soft warning (but keep the candidates).
+            let stillInvalid = validateCandidates(result.candidates, intent: request.intent) != nil
+            if result.didRetry && stillInvalid {
+                statusMessage = "Some candidates may not be real questions — the model didn't follow the format."
+            } else {
+                statusMessage = "Generated 3 candidate comments."
+            }
+            onPresentCompanion?(lastCompanionAnchorFrame)
+        } catch is CancellationError {
+            statusMessage = "Generation cancelled."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reworkCandidate(_ original: GeneratedCandidate) async {
+        guard !Task.isCancelled else { return }
+
+        guard let apiKey = await resolveAPIKeyOrReport() else { return }
+
+        let postText = editablePostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !postText.isEmpty else {
+            errorMessage = AppError.emptyPostText.localizedDescription
+            return
+        }
+
+        regeneratingCandidateID = original.id
+        errorMessage = nil
+        statusMessage = "Regenerating candidate…"
+        applyRetryMetadata(didRetry: false)
+
+        defer { regeneratingCandidateID = nil }
+
+        let request = buildGenerationRequest(postText: postText, reworkTarget: original.text)
+
+        do {
+            let result = try await performGenerationWithRetry(
+                request: request,
+                apiKey: apiKey,
+                provider: settings.provider
+            )
+            guard !Task.isCancelled else { return }
+
+            applyRetryMetadata(didRetry: result.didRetry)
+
+            guard let replacement = result.candidates.first else {
+                errorMessage = "The model did not return a replacement candidate."
+                return
+            }
+
+            // In-place single-row replacement — preserve the clicked row's id
+            // so SwiftUI ForEach diffing doesn't churn the whole list.
+            if let index = generatedCandidates.firstIndex(where: { $0.id == original.id }) {
+                generatedCandidates[index] = GeneratedCandidate(
+                    id: original.id,
+                    text: replacement.text,
+                    lengthCategory: replacement.lengthCategory
+                )
+
+                let stillInvalid = validateCandidates([generatedCandidates[index]], intent: request.intent) != nil
+                if result.didRetry && stillInvalid {
+                    statusMessage = "Regenerated, but the new candidate may not be a real question."
+                } else {
+                    statusMessage = "Regenerated candidate."
+                }
+            } else {
+                // The original candidate was removed mid-flight (e.g. a full
+                // Generate ran). Silently drop the result.
+                statusMessage = nil
+            }
+        } catch is CancellationError {
+            statusMessage = "Regeneration cancelled."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Shared keychain-loading / health-check prelude used by both
+    /// `generateComments()` and `reworkCandidate()`. Returns the API key (or
+    /// nil for local providers) on success; returns `nil` and sets an error
+    /// on failure.
+    private func resolveAPIKeyOrReport() async -> String?? {
+        switch settings.provider.kind {
+        case .openAI:
+            guard let storedAPIKey = keychainService.loadAPIKey(), !storedAPIKey.isEmpty else {
+                errorMessage = AppError.missingAPIKey.localizedDescription
+                return nil
+            }
+            return .some(storedAPIKey)
+        case .ollama:
+            await evaluateProviderHealth()
+            switch localProviderHealth {
+            case .ready, .unknown, .resourceRisk:
+                return .some(nil)
+            case .checking:
+                errorMessage = "Local provider check is still running. Try again in a moment."
+                return nil
+            case .unavailable, .modelMissing, .invalidEndpoint:
+                errorMessage = localProviderHealthMessage
+                return nil
+            }
+        }
+    }
+
+    private func buildGenerationRequest(postText: String, reworkTarget: String?) -> GenerationRequest {
         let selectedExamples = styleCorpusProcessor.selectRelevantExamples(
             from: styleCorpus,
             for: postText,
             preferredLanguage: resolvedExampleLanguageCode()
         )
-
         let detectedLanguage = detectPostLanguage(postText)
 
-        let request = GenerationRequest(
+        return GenerationRequest(
             postText: postText,
             ocrConfidence: scanResult?.overallConfidence ?? 0,
             languageSelection: selectedLanguage,
@@ -712,26 +845,78 @@ public final class AppModel: ObservableObject {
             detectedLanguageName: detectedLanguage,
             intent: selectedIntent,
             uniqueThought: uniqueThought,
-            personaProfile: personaProfile,
+            personaProfile: resolvedPersona,
             styleExamples: selectedExamples,
-            additionalPromptContext: settings.additionalPromptContext
+            additionalPromptContext: settings.additionalPromptContext,
+            reworkTarget: reworkTarget
+        )
+    }
+
+    /// Runs the generation through the service with an Ask-Question validator
+    /// + up to one repair retry. Stays pure of keychain I/O so tests can call
+    /// it with any stub service and any dummy api-key/provider.
+    internal func performGenerationWithRetry(
+        request: GenerationRequest,
+        apiKey: String?,
+        provider: ProviderSettings
+    ) async throws -> (candidates: [GeneratedCandidate], didRetry: Bool) {
+        let firstBatch = try await commentGenerator.generate(
+            request: request,
+            apiKey: apiKey,
+            provider: provider
         )
 
-        do {
-            let generated = try await commentGenerator.generate(
-                request: request,
-                apiKey: apiKey,
-                provider: settings.provider
-            )
-            guard !Task.isCancelled else { return }
-            generatedCandidates = generated
-            statusMessage = "Generated 3 candidate comments."
-            onPresentCompanion?(lastCompanionAnchorFrame)
-        } catch is CancellationError {
-            statusMessage = "Generation cancelled."
-        } catch {
-            errorMessage = error.localizedDescription
+        guard let feedback = validateCandidates(firstBatch, intent: request.intent) else {
+            return (firstBatch, false)
         }
+
+        var retryRequest = request
+        retryRequest.retryFeedback = feedback
+
+        let secondBatch = try await commentGenerator.generate(
+            request: retryRequest,
+            apiKey: apiKey,
+            provider: provider
+        )
+        // Never more than one retry — return the second batch regardless of
+        // whether it also fails validation. The caller decides how to surface
+        // a still-invalid result (soft warning vs. success message).
+        return (secondBatch, true)
+    }
+
+    /// Validates generated candidates against their requested intent. Currently
+    /// only the Ask-Question intent has a post-parse check; every other intent
+    /// short-circuits to `nil` (no feedback).
+    ///
+    /// The rule for Ask Question is:
+    /// 1. The trimmed text must end with '?'.
+    /// 2. It must have at least 3 whitespace-separated tokens (rejects trivial
+    ///    tag questions like "Great point?").
+    ///
+    /// Language scope: this is accurate for Latin-script languages (English,
+    /// Spanish, French, German, Portuguese, Italian, Dutch, etc.). It is NOT
+    /// accurate for CJK languages without whitespace tokenization — those may
+    /// produce false positives on short legitimate questions. Accepted trade-off.
+    internal func validateCandidates(_ candidates: [GeneratedCandidate], intent: CommentIntent) -> String? {
+        guard intent == .askQuestion else { return nil }
+
+        let invalid = candidates.filter { candidate in
+            let trimmed = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasSuffix("?") else { return true }
+            let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
+            return wordCount < 3
+        }
+
+        if invalid.isEmpty { return nil }
+        return "You returned \(invalid.count) candidate(s) that are not real questions. Every candidate MUST end with '?' AND be at least 3 words long. Do not submit 2-word tag questions like 'Great point?'."
+    }
+
+    /// Tiny helper that updates the `lastGenerationDidRetry` @Published flag.
+    /// Deliberately does NOT touch `generatedCandidates`: full-set generation
+    /// overwrites the whole list while regenerate replaces a single row, so
+    /// mixing those concerns into one helper would be wrong.
+    internal func applyRetryMetadata(didRetry: Bool) {
+        lastGenerationDidRetry = didRetry
     }
 
     private func loadPersonaIfAvailable() {
@@ -841,6 +1026,48 @@ public final class AppModel: ObservableObject {
             if errorMessage == AppError.screenRecordingPermissionDenied.localizedDescription {
                 errorMessage = nil
             }
+        }
+    }
+
+    private func startObservingScreenParameters() {
+        guard screenParametersObserver == nil else { return }
+
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleScreenParametersDidChange()
+            }
+        }
+    }
+
+    private func handleScreenParametersDidChange() {
+        // Only clear the stored companion anchor if it no longer overlaps ANY
+        // attached screen. Benign arrangement changes that leave the anchor on
+        // a still-valid screen should preserve the current layout.
+        if let anchor = lastCompanionAnchorFrame {
+            let stillValid = NSScreen.screens.contains(where: { $0.frame.intersects(anchor) })
+            if !stillValid {
+                lastCompanionAnchorFrame = nil
+            }
+        }
+
+        // Same policy for the reading selection: clear (via the helper so the
+        // persisted settings are also updated) only when the stored rect no
+        // longer maps onto any current screen.
+        if let selection = readingSelectionFrame {
+            let stillValid = NSScreen.screens.contains(where: { $0.frame.intersects(selection) })
+            if !stillValid {
+                clearReadingSelection()
+            }
+        }
+
+        presentCurrentCompanion()
+
+        if isReadingModeActive {
+            onPresentReadingMode?(lastCompanionAnchorFrame)
         }
     }
 
